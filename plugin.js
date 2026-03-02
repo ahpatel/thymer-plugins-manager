@@ -2,6 +2,7 @@ class Plugin extends AppPlugin {
     
     onLoad() {
         this.githubPat = localStorage.getItem('pm_github_pat') || '';
+        this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         
         // Register the panel type
         this.ui.registerCustomPanelType("plugin-manager-panel", (panel) => {
@@ -74,6 +75,8 @@ class Plugin extends AppPlugin {
                 <div class="pm-tabs">
                     <div class="pm-tab active" data-tab="global">Global Plugins</div>
                     <div class="pm-tab" data-tab="collections">Collections</div>
+                    <div class="pm-tab" data-tab="themes">Themes</div>
+                    <div class="pm-tab" data-tab="discover">Discover</div>
                     <div class="pm-tab" data-tab="settings">Settings</div>
                 </div>
 
@@ -95,6 +98,29 @@ class Plugin extends AppPlugin {
                     <div id="pm-collections-list" class="pm-list-container">Loading...</div>
                 </div>
 
+                
+                
+                <div class="pm-tab-content" id="tab-discover">
+                    <div class="pm-tab-actions" style="justify-content: space-between; align-items: center;">
+                        <span style="font-size: 13px; color: var(--text-muted, #999);">Community Plugins and Themes</span>
+                        <button class="pm-btn" id="pm-refresh-discover-btn">Refresh List</button>
+                    </div>
+                    <div id="pm-discover-list" class="pm-list-container">Loading...</div>
+                </div>
+
+                
+                <div class="pm-tab-content" id="tab-themes">
+                    <div class="pm-tab-actions">
+                        <button class="pm-btn primary" id="pm-import-theme-btn">Import Theme CSS</button>
+                        <button class="pm-btn" id="pm-export-theme-btn">Export Theme CSS</button>
+                    </div>
+                    <div class="pm-card" style="height: auto;">
+                        <div class="pm-card-info">
+                            <p>Note: Thymer currently manages Global Theme CSS outside of the Plugin API. Use the Discover tab to find themes, or use the buttons above to fetch CSS from a GitHub repository to easily copy into your workspace's <strong>Edit Theme CSS</strong> menu.</p>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="pm-tab-content" id="tab-settings">
                     <div class="pm-card" style="height: auto;">
                         <form style="width: 100%; margin: 0;" onsubmit="return false;">
@@ -105,6 +131,15 @@ class Plugin extends AppPlugin {
                                 </p>
                                 <input type="password" id="pm-pat-input" class="pm-input" placeholder="ghp_xxxxxxxxxxxx" value="${this.githubPat}" autocomplete="off">
                             </div>
+                            
+                            <div class="pm-input-group" style="margin-top: 20px;">
+                                <label>Community Repositories</label>
+                                <p style="font-size: 13px; color: var(--text-color-secondary, #999); margin-bottom: 10px;">
+                                    List of raw Markdown URLs (one per line) to discover community plugins and themes.
+                                </p>
+                                <textarea id="pm-repos-input" class="pm-textarea" style="min-height: 80px;" placeholder="https://raw.githubusercontent.com/.../README.md">${this.communityRepos}</textarea>
+                            </div>
+
                             <button type="button" class="pm-btn primary" id="pm-save-settings">Save Settings</button>
                         </form>
                     </div>
@@ -117,6 +152,7 @@ class Plugin extends AppPlugin {
             element.innerHTML = html;
             this.bindEvents(element);
             this.loadPlugins(element);
+            this.loadDiscoverPlugins(element);
         }
     }
 
@@ -135,11 +171,28 @@ class Plugin extends AppPlugin {
         // Settings
         container.querySelector('#pm-save-settings').addEventListener('click', () => {
             const pat = container.querySelector('#pm-pat-input').value.trim();
+            const repos = container.querySelector('#pm-repos-input').value.trim();
+            this.communityRepos = repos;
+            localStorage.setItem('pm_community_repos', repos);
             this.githubPat = pat;
             localStorage.setItem('pm_github_pat', pat);
             this.ui.addToaster({ title: "Settings Saved", dismissible: true, autoDestroyTime: 3000 });
         });
         
+        
+        container.querySelector('#pm-refresh-discover-btn').addEventListener('click', () => {
+            this.loadDiscoverPlugins(container);
+        });
+
+        
+        container.querySelector('#pm-import-theme-btn').addEventListener('click', () => {
+            this.showThemeImportDialog();
+        });
+        
+        container.querySelector('#pm-export-theme-btn').addEventListener('click', () => {
+            this.showThemeExportDialog();
+        });
+
         // Actions
         container.querySelector('#pm-install-global-btn').addEventListener('click', () => this.showInstallDialog(container, 'app'));
         container.querySelector('#pm-import-global-btn').addEventListener('click', () => this.showImportDialog(container, 'app'));
@@ -148,6 +201,161 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-install-col-btn').addEventListener('click', () => this.showInstallDialog(container, 'collection'));
         container.querySelector('#pm-import-col-btn').addEventListener('click', () => this.showImportDialog(container, 'collection'));
         container.querySelector('#pm-export-col-btn').addEventListener('click', () => this.showExportDialog('collection'));
+    }
+
+
+    async loadDiscoverPlugins(container) {
+        const listContainer = container.querySelector('#pm-discover-list');
+        listContainer.innerHTML = 'Fetching community plugins...';
+        
+        try {
+            const repos = this.communityRepos.split('\n').map(u => u.trim()).filter(Boolean);
+            if (repos.length === 0) {
+                listContainer.innerHTML = '<div class="pm-card"><div class="pm-card-info"><p>No community repositories configured in Settings.</p></div></div>';
+                return;
+            }
+
+            const items = [];
+            
+            for (const repoUrl of repos) {
+                try {
+                    const res = await fetch(repoUrl);
+                    if (!res.ok) continue;
+                    const text = await res.text();
+                    
+                    const lines = text.split('\n');
+                    let currentCategory = 'Other';
+                    let foundPluginsSection = false;
+
+                    for (let line of lines) {
+                        line = line.trim();
+                        if (line.startsWith('## Plugins') || line.startsWith('## Themes')) {
+                            foundPluginsSection = true;
+                        }
+                        if (!foundPluginsSection) continue;
+                        
+                        if (line.startsWith('## ') || line.startsWith('### ')) {
+                            currentCategory = line.replace(/#/g, '').trim();
+                        } else if (line.startsWith('- [')) {
+                            const match = line.match(/- \[(.*?)\]\((.*?)\)(?: - (.*))?/);
+                            if (match && match[2].startsWith('http')) {
+                                items.push({
+                                    name: match[1],
+                                    url: match[2],
+                                    description: match[3] || '',
+                                    category: currentCategory,
+                                    sourceRepo: repoUrl
+                                });
+                            }
+                        }
+                    }
+                } catch(e) {
+                    console.error("Error fetching discover repo", repoUrl, e);
+                }
+            }
+            
+            if (items.length === 0) {
+                listContainer.innerHTML = '<div class="pm-card"><div class="pm-card-info"><p>No plugins found in the configured community repositories.</p></div></div>';
+                return;
+            }
+            
+            listContainer.innerHTML = '';
+            
+            items.forEach(item => {
+                const isCollection = item.category.toLowerCase().includes('collection');
+                const isTheme = item.category.toLowerCase().includes('theme');
+                const badgeText = isTheme ? 'Theme' : (isCollection ? 'Collection' : 'App');
+                
+                const card = document.createElement('div');
+                card.className = 'pm-card';
+                card.innerHTML = `
+                    <div class="pm-card-info">
+                        <h3>
+                            ${item.name} 
+                            <span class="pm-badge">${badgeText}</span>
+                        </h3>
+                        <p>${item.description}</p>
+                        <p style="margin-top: 5px; font-size: 11px;"><a href="${item.url}" target="_blank">${item.url}</a></p>
+                    </div>
+                    <div class="pm-card-actions"></div>
+                `;
+                
+                const actionsContainer = card.querySelector('.pm-card-actions');
+                
+                
+                const previewBtn = document.createElement('button');
+                previewBtn.className = 'pm-btn';
+                previewBtn.innerText = 'Preview';
+                previewBtn.style.marginRight = '5px';
+                
+                previewBtn.addEventListener('click', () => {
+                    this.previewTheme(item.url);
+                });
+                
+                if (isTheme) {
+                    actionsContainer.appendChild(previewBtn);
+                }
+
+                const installBtn = document.createElement('button');
+                installBtn.className = 'pm-btn primary';
+                if (isTheme) {
+                    installBtn.innerText = 'Copy CSS';
+                } else {
+                    installBtn.innerText = 'Install';
+                }
+                actionsContainer.appendChild(installBtn);
+                
+                installBtn.addEventListener('click', async () => {
+                    const originalText = installBtn.innerText;
+                    installBtn.innerText = isTheme ? 'Fetching...' : 'Installing...';
+                    installBtn.disabled = true;
+                    
+                    try {
+                        if (isTheme) {
+                            const match = item.url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+                            if (!match) throw new Error("Invalid GitHub URL.");
+                            const owner = match[1];
+                            const repo = match[2].replace(/\.git$/, '');
+                            const headers = {};
+                            if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
+                            
+                            const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/`;
+                            const res = await fetch(apiUrl, { headers });
+                            if (!res.ok) throw new Error("Could not fetch repo contents.");
+                            
+                            const files = await res.json();
+                            const cssFile = files.find(f => f.name.endsWith('.css'));
+                            if (!cssFile) throw new Error("No .css file found in the root of this repository.");
+                            
+                            const cssRes = await fetch(cssFile.download_url, { headers });
+                            if (!cssRes.ok) throw new Error("Failed to download CSS file.");
+                            
+                            const cssText = await cssRes.text();
+                            await navigator.clipboard.writeText(cssText);
+                            this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
+                            installBtn.innerText = 'Copied';
+                        } else {
+                            const { json, js } = await this.fetchGithubRepo(item.url);
+                            await this.installPlugin(json, js);
+                            this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
+                            installBtn.innerText = 'Installed';
+                            this.loadPlugins(container);
+                        }
+                    } catch (err) {
+                        this.ui.addToaster({ title: "Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
+                        installBtn.innerText = originalText;
+                        installBtn.disabled = false;
+                    }
+                });
+
+                
+                listContainer.appendChild(card);
+            });
+
+        } catch (err) {
+            console.error(err);
+            listContainer.innerHTML = "Error loading community plugins.";
+        }
     }
 
     async loadPlugins(container) {
@@ -244,6 +452,183 @@ class Plugin extends AppPlugin {
             
             container.appendChild(card);
         });
+    }
+
+
+    async showThemeImportDialog() {
+        const overlayHtml = `
+            <div id="pm-theme-import-modal" class="pm-modal">
+                <div class="pm-modal-content">
+                    <h3>Import Theme CSS</h3>
+                    <p style="font-size: 13px; color: var(--text-muted, #999); margin-bottom: 15px;">
+                        Paste a GitHub repository URL for a theme. We will fetch its CSS and copy it to your clipboard so you can paste it into <strong>Edit Theme CSS</strong>.
+                    </p>
+                    <input type="text" id="pm-theme-repo-input" class="pm-input" placeholder="https://github.com/user/thymer-theme" />
+                    
+                    <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
+                        <button class="pm-btn" id="pm-theme-cancel">Cancel</button>
+                        <button class="pm-btn primary" id="pm-theme-fetch">Fetch CSS</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = overlayHtml;
+        document.body.appendChild(tempDiv);
+        
+        document.getElementById('pm-theme-cancel').addEventListener('click', () => {
+            document.body.removeChild(tempDiv);
+        });
+
+        document.getElementById('pm-theme-fetch').addEventListener('click', async () => {
+            const url = document.getElementById('pm-theme-repo-input').value.trim();
+            if (!url) return;
+            
+            const btn = document.getElementById('pm-theme-fetch');
+            btn.innerText = "Fetching...";
+            btn.disabled = true;
+            
+            try {
+                const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+                if (!match) throw new Error("Invalid GitHub URL.");
+                
+                const owner = match[1];
+                const repo = match[2].replace(/\.git$/, '');
+                
+                const headers = {};
+                if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
+                
+                // Fetch repo contents to find CSS file
+                const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/`;
+                const res = await fetch(apiUrl, { headers });
+                if (!res.ok) throw new Error("Could not fetch repo contents.");
+                
+                const files = await res.json();
+                const cssFile = files.find(f => f.name.endsWith('.css'));
+                
+                if (!cssFile) throw new Error("No .css file found in the root of this repository.");
+                
+                const cssRes = await fetch(cssFile.download_url, { headers });
+                if (!cssRes.ok) throw new Error("Failed to download CSS file.");
+                
+                const cssText = await cssRes.text();
+                
+                await navigator.clipboard.writeText(cssText);
+                
+                document.body.removeChild(tempDiv);
+                this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
+                
+            } catch(e) {
+                console.error(e);
+                this.ui.addToaster({ title: "Theme Fetch Failed", message: e.message, autoDestroyTime: 5000, dismissible: true });
+                btn.innerText = "Fetch CSS";
+                btn.disabled = false;
+            }
+        });
+    }
+
+    showThemeExportDialog() {
+        const overlayHtml = `
+            <div id="pm-theme-export-modal" class="pm-modal">
+                <div class="pm-modal-content">
+                    <h3>Export Theme CSS</h3>
+                    <p style="font-size: 13px; color: var(--text-muted, #999); margin-bottom: 15px;">
+                        Because the SDK cannot read your global Custom Theme CSS directly, you must paste it here to download it as a backup file.
+                    </p>
+                    <textarea id="pm-theme-export-textarea" class="pm-textarea" placeholder="Paste your CSS here..."></textarea>
+                    
+                    <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
+                        <button class="pm-btn" id="pm-theme-export-cancel">Cancel</button>
+                        <button class="pm-btn primary" id="pm-theme-export-download">Download .css</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = overlayHtml;
+        document.body.appendChild(tempDiv);
+        
+        document.getElementById('pm-theme-export-cancel').addEventListener('click', () => {
+            document.body.removeChild(tempDiv);
+        });
+
+        document.getElementById('pm-theme-export-download').addEventListener('click', () => {
+            const css = document.getElementById('pm-theme-export-textarea').value.trim();
+            if (!css) return;
+            
+            const blob = new Blob([css], { type: 'text/css' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `thymer-theme-backup.css`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            document.body.removeChild(tempDiv);
+        });
+    }
+
+
+    async previewTheme(repoUrl) {
+        try {
+            const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+            if (!match) return;
+            const owner = match[1];
+            const repo = match[2].replace(/\.git$/, '');
+            const headers = {};
+            if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
+            
+            const readmeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/readme`, { headers });
+            if (!readmeRes.ok) throw new Error("No README");
+            
+            const readmeData = await readmeRes.json();
+            const content = atob(readmeData.content);
+            
+            // Extract images from markdown
+            const imgRegex = /!\[.*?\]\((.*?)\)|<img.*?src="(.*?)".*?>/g;
+            const images = [];
+            let imgMatch;
+            while ((imgMatch = imgRegex.exec(content)) !== null) {
+                const src = imgMatch[1] || imgMatch[2];
+                if (src && src.startsWith('http')) {
+                    images.push(src);
+                }
+            }
+            
+            if (images.length === 0) {
+                this.ui.addToaster({ title: "No Previews", message: "No images found in the theme's README.", autoDestroyTime: 3000, dismissible: true });
+                return;
+            }
+            
+            const overlayHtml = `
+                <div id="pm-theme-preview-modal" class="pm-modal">
+                    <div class="pm-modal-content" style="width: 800px; max-height: 90vh; overflow-y: auto;">
+                        <h3>Theme Preview</h3>
+                        <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px;">
+                            ${images.map(img => `<img src="${img}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--border-default, #333);" />`).join('')}
+                        </div>
+                        <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+                            <button class="pm-btn primary" id="pm-close-preview">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = overlayHtml;
+            document.body.appendChild(tempDiv);
+            
+            document.getElementById('pm-close-preview').addEventListener('click', () => {
+                document.body.removeChild(tempDiv);
+            });
+            
+        } catch(e) {
+            this.ui.addToaster({ title: "Preview Failed", message: "Could not load theme preview images.", autoDestroyTime: 3000, dismissible: true });
+        }
     }
 
     // --- GitHub Utils ---

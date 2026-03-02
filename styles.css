@@ -59,7 +59,9 @@
     flex-direction: column;
     justify-content: space-between;
     align-items: flex-start;
-    height: 160px;
+    /* Allow the card to size naturally based on content while maintaining structure */
+    height: auto;
+    min-height: auto;
 }
 .pm-card-info {
     flex: 1;
