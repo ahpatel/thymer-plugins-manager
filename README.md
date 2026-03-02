@@ -1,0 +1,1 @@
+# thymer-plugins-manager
