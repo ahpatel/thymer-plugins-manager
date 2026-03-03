@@ -4,6 +4,7 @@ class Plugin extends AppPlugin {
         this.githubPat = localStorage.getItem('pm_github_pat') || '';
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
+        this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}');
 
         // Register the panel type
         this.ui.registerCustomPanelType("plugin-manager-panel", (panel) => {
@@ -385,41 +386,83 @@ class Plugin extends AppPlugin {
                 actionsContainer.appendChild(previewBtn);
             }
 
+            // Check if plugin is on the incompatible list
+            const isIncompatible = !!this._incompatiblePlugins[item.url];
+
             const installBtn = document.createElement('button');
-            installBtn.className = 'pm-btn primary';
-            if (isTheme) {
+            if (isIncompatible) {
+                installBtn.className = 'pm-btn';
+                installBtn.innerText = 'Incompatible';
+                installBtn.disabled = true;
+                installBtn.style.opacity = '0.5';
+            } else if (isTheme) {
+                installBtn.className = 'pm-btn primary';
                 installBtn.innerText = 'Copy CSS';
             } else {
+                installBtn.className = 'pm-btn primary';
                 installBtn.innerText = 'Install';
             }
+
+            // If incompatible, add a Recheck button first
+            if (isIncompatible) {
+                const recheckBtn = document.createElement('button');
+                recheckBtn.className = 'pm-btn';
+                recheckBtn.innerText = 'Recheck';
+                recheckBtn.style.marginRight = '5px';
+                recheckBtn.addEventListener('click', async () => {
+                    recheckBtn.innerText = 'Checking...';
+                    recheckBtn.disabled = true;
+                    try {
+                        if (isTheme) {
+                            await this._fetchThemeCSS(item.url);
+                        } else {
+                            await this.fetchGithubRepo(item.url);
+                        }
+                        // Success — remove from incompatible list
+                        delete this._incompatiblePlugins[item.url];
+                        localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
+                        this.ui.addToaster({ title: "Compatible!", message: `${item.name} is now available to install.`, autoDestroyTime: 3000, dismissible: true });
+                        this._renderDiscoverCards(container, items);
+                    } catch (e) {
+                        this.ui.addToaster({ title: "Still Incompatible", message: e.message, autoDestroyTime: 4000, dismissible: true });
+                        recheckBtn.innerText = 'Recheck';
+                        recheckBtn.disabled = false;
+                    }
+                });
+                actionsContainer.appendChild(recheckBtn);
+            }
+
             actionsContainer.appendChild(installBtn);
 
-            installBtn.addEventListener('click', async () => {
-                const originalText = installBtn.innerText;
-                installBtn.innerText = isTheme ? 'Fetching...' : 'Installing...';
-                installBtn.disabled = true;
+            if (!isIncompatible) {
+                installBtn.addEventListener('click', async () => {
+                    const originalText = installBtn.innerText;
+                    installBtn.innerText = isTheme ? 'Fetching...' : 'Installing...';
+                    installBtn.disabled = true;
 
-                try {
-                    if (isTheme) {
-                        // Use raw.githubusercontent.com directly to avoid CORS with api.github.com
-                        const cssText = await this._fetchThemeCSS(item.url);
-                        await navigator.clipboard.writeText(cssText);
-                        this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
-                        installBtn.innerText = 'Copied';
-                    } else {
-                        // Use the repo URL directly for installation
-                        const { json, js } = await this.fetchGithubRepo(item.url);
-                        await this.installPlugin(json, js);
-                        this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
-                        installBtn.innerText = 'Installed';
-                        this.loadPlugins(container);
+                    try {
+                        if (isTheme) {
+                            const cssText = await this._fetchThemeCSS(item.url);
+                            await navigator.clipboard.writeText(cssText);
+                            this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
+                            installBtn.innerText = 'Copied';
+                        } else {
+                            const { json, js } = await this.fetchGithubRepo(item.url);
+                            await this.installPlugin(json, js);
+                            this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
+                            installBtn.innerText = 'Installed';
+                            this.loadPlugins(container);
+                        }
+                    } catch (err) {
+                        // Add to incompatible list
+                        this._incompatiblePlugins[item.url] = { name: item.name, error: err.message, date: new Date().toISOString() };
+                        localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
+                        this.ui.addToaster({ title: "Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
+                        // Re-render to show the greyed-out state
+                        this._renderDiscoverCards(container, items);
                     }
-                } catch (err) {
-                    this.ui.addToaster({ title: "Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
-                    installBtn.innerText = originalText;
-                    installBtn.disabled = false;
-                }
-            });
+                });
+            }
 
             listContainer.appendChild(card);
         });
