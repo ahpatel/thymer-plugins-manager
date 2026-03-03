@@ -1,4 +1,4 @@
-# Thymer Plugin Manager
+# Thymer Plugins Manager
 
 A powerful utility plugin for Thymer that allows you to install, manage, update, import, and export your Global Plugins and Collection Plugins from a single unified interface.
 
@@ -40,20 +40,20 @@ Since this plugin manages other plugins, it must be installed manually first.
 2. Paste the contents of `plugin.js` into the **Custom Code** section of the plugin.
 3. Paste the contents of `plugin.json` into the **Config** section.
 4. Paste the contents of `styles.css` into the **Custom CSS** section.
-5. Save the plugin. A new **Plugin Manager** icon will appear in your sidebar.
+5. Save the plugin. A new **Plugins Manager** icon will appear in your sidebar.
 
 ### Self-Update
 
-After initial manual install, link the Plugin Manager to its GitHub repo for future updates:
+After initial manual install, link the PluginsManager to its GitHub repo for future updates:
 
-1. Open Plugin Manager → **Global Plugins** tab.
-2. Click the 🔗 link icon on the Plugin Manager card.
+1. Open Plugins Manager → **Global Plugins** tab.
+2. Click the 🔗 link icon on the Plugins Manager card.
 3. Enter: `https://github.com/ahpatel/thymer-plugins-manager`
 4. The update button (↻) will appear — click it to pull the latest version.
 
 ## Usage
 
-Click the **Plugin Manager** icon in your left sidebar to open the dashboard.
+Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
 
 ### Tabs
 
@@ -78,7 +78,7 @@ Click the **Plugin Manager** icon in your left sidebar to open the dashboard.
 
 ## Development
 
-To modify the Plugin Manager itself:
+To modify the Plugins Manager itself:
 
 ```bash
 cd thymer-plugins-manager

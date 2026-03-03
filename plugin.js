@@ -26,7 +26,7 @@ class Plugin extends AppPlugin {
 
         // Add a sidebar button to launch it
         this.ui.addSidebarItem({
-            label: "Plugin Manager",
+            label: "Plugins Manager",
             icon: "box",
             tooltip: "Manage your Thymer plugins",
             onClick: async () => {
@@ -88,7 +88,7 @@ class Plugin extends AppPlugin {
                 } catch (e) {
                     // Bail early if rate-limited
                     if (e.message && (e.message.includes('rate limit') || e.message.includes('403'))) {
-                        console.warn('[Plugin Manager] GitHub rate limit hit during background check, stopping early.');
+                        console.warn('[Plugins Manager] GitHub rate limit hit during background check, stopping early.');
                         break;
                     }
                     /* ignore individual plugin errors */
@@ -107,7 +107,7 @@ class Plugin extends AppPlugin {
         const html = `
             <div class="pm-container">
                 <div class="pm-header">
-                    <h1>Plugin Manager</h1>
+                    <h1>Plugins Manager</h1>
                 </div>
                 
                 <div class="pm-tabs">
@@ -1027,26 +1027,28 @@ class Plugin extends AppPlugin {
     async _autoExport() {
         if (!this._autoExportEnabled) return;
         if (!this._autoExportDirHandle) {
-            console.warn('[Plugin Manager] Auto-export enabled but no directory handle available.');
+            console.warn('[Plugins Manager] Auto-export enabled but no directory handle available.');
             return;
         }
         try {
             // Re-verify permission (may prompt user once per session)
             const perm = await this._autoExportDirHandle.requestPermission({ mode: 'readwrite' });
             if (perm !== 'granted') {
-                console.warn('[Plugin Manager] Auto-export: write permission denied.');
+                console.warn('[Plugins Manager] Auto-export: write permission denied.');
                 return;
             }
             const data = await this._getExportData();
             const jsonStr = JSON.stringify(data, null, 2);
-            const filename = `thymer-plugins-backup.json`;
+            const now = new Date();
+            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const filename = `thymer-plugins-backup-${timestamp}.json`;
             const fileHandle = await this._autoExportDirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(jsonStr);
             await writable.close();
-            console.log(`[Plugin Manager] Auto-exported backup to ${this._autoExportDirName}/${filename}`);
+            console.log(`[Plugins Manager] Auto-exported backup to ${this._autoExportDirName}/${filename}`);
         } catch (e) {
-            console.error('[Plugin Manager] Auto-export failed:', e);
+            console.error('[Plugins Manager] Auto-export failed:', e);
             this.ui.addToaster({ title: "Auto-Backup Failed", message: e.message, autoDestroyTime: 6000, dismissible: true });
         }
     }
@@ -1084,7 +1086,7 @@ class Plugin extends AppPlugin {
             });
             if (handle) this._autoExportDirHandle = handle;
         } catch (e) {
-            console.warn('[Plugin Manager] Could not restore auto-export directory handle:', e);
+            console.warn('[Plugins Manager] Could not restore auto-export directory handle:', e);
         }
     }
 
@@ -1344,9 +1346,9 @@ class Plugin extends AppPlugin {
     }
 
     async installPlugin(jsonConf, jsCode, { interactive = true } = {}) {
-        // Skip the Plugin Manager itself — it doesn't need to be reinstalled
+        // Skip the Plugins Manager itself — it doesn't need to be reinstalled
         const name = (jsonConf.name || '').toLowerCase();
-        if (name === 'plugin manager' || name === 'plugins manager') {
+        if (name === 'plugins manager' || name === 'plugins manager') {
             return 'skipped';
         }
 

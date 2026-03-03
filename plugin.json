@@ -1,6 +1,6 @@
 {
     "type": "app",
-    "name": "Plugin Manager",
+    "name": "Plugins Manager",
     "icon": "box",
     "version": "1.1.1",
     "description": "Install, update, import and export Thymer plugins from GitHub or local files.",
