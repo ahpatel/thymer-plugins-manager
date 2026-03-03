@@ -1015,12 +1015,22 @@ class Plugin extends AppPlugin {
     async _getExportData() {
         const allGlobals = await this.data.getAllGlobalPlugins();
         const allCollections = await this.data.getAllCollections();
-        return [...allGlobals, ...allCollections].map(p => {
+
+        const globalsData = allGlobals.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
-                return { name: json.name, type: json.type, version: json.version, source_repo: json.__source_repo, code, json };
+                return { name: json.name, type: json.type || 'app', version: json.version, source_repo: json.__source_repo, code, json };
             } catch (e) { return null; }
-        }).filter(Boolean);
+        });
+
+        const collectionsData = allCollections.map(p => {
+            try {
+                const { json, code } = p.getExistingCodeAndConfig();
+                return { name: json.name, type: 'collection', version: json.version, source_repo: json.__source_repo, code, json };
+            } catch (e) { return null; }
+        });
+
+        return [...globalsData, ...collectionsData].filter(Boolean);
     }
 
     /** Auto-export full backup to chosen directory */
@@ -1428,9 +1438,15 @@ class Plugin extends AppPlugin {
                         <input type="file" id="pm-import-file" accept=".json" style="font-size: 13px; color: inherit; width: 100%;" />
                     </div>
 
-                    <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
-                        <button class="pm-btn" id="pm-import-cancel">Cancel</button>
-                        <button class="pm-btn primary" id="pm-import-confirm">Import</button>
+                    <div style="margin-top: 15px; display: flex; align-items: center; justify-content: space-between;">
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                            <input type="checkbox" id="pm-import-full-override" />
+                            <span style="color: #ef4444; font-weight: bold;">Full Override (Delete existing)</span>
+                        </label>
+                        <div style="display: flex; gap: 10px;">
+                            <button class="pm-btn" id="pm-import-cancel">Cancel</button>
+                            <button class="pm-btn primary" id="pm-import-confirm">Import</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1461,21 +1477,60 @@ class Plugin extends AppPlugin {
             const val = document.getElementById('pm-import-textarea').value.trim();
             if (!val) return;
 
+            const isFullOverride = document.getElementById('pm-import-full-override').checked;
+            if (isFullOverride) {
+                if (!confirm(`WARNING: Full Override will delete existing ${typeFilter === 'app' ? 'Global Plugins' : 'Collections'} that are NOT in this backup. This cannot be undone. Are you sure?`)) {
+                    return;
+                }
+            }
+
             document.getElementById('pm-import-confirm').innerText = "Importing...";
             document.getElementById('pm-import-confirm').disabled = true;
 
             let successCount = 0;
             let failedNames = [];
             let skippedNames = [];
+            let deletedCount = 0;
 
             if (val.startsWith('[')) {
                 // JSON full backup import
                 try {
                     const parsed = JSON.parse(val);
+
+                    if (isFullOverride) {
+                        const backupNames = parsed.map(p => (p.json && p.json.name) || p.name).filter(Boolean);
+
+                        if (typeFilter === 'app' || typeFilter === 'all') {
+                            const allGlobals = await this.data.getAllGlobalPlugins();
+                            for (const p of allGlobals) {
+                                try {
+                                    const pName = p.getExistingCodeAndConfig().json.name;
+                                    if (!backupNames.includes(pName) && pName.toLowerCase() !== 'plugins manager') {
+                                        await p.trashPlugin();
+                                        deletedCount++;
+                                    }
+                                } catch (e) { }
+                            }
+                        }
+
+                        if (typeFilter === 'collection' || typeFilter === 'all') {
+                            const allCollections = await this.data.getAllCollections();
+                            for (const c of allCollections) {
+                                try {
+                                    const cName = c.getExistingCodeAndConfig().json.name;
+                                    if (!backupNames.includes(cName)) {
+                                        await c.trashPlugin();
+                                        deletedCount++;
+                                    }
+                                } catch (e) { }
+                            }
+                        }
+                    }
+
                     for (const p of parsed) {
                         const pName = (p.json && p.json.name) || p.name || 'Unknown';
                         try {
-                            const result = await this.installPlugin(p.json, p.code);
+                            const result = await this.installPlugin(p.json, p.code, { interactive: !isFullOverride });
                             if (result === 'skipped') { skippedNames.push(pName); }
                             else { successCount++; }
                         } catch (e) {
@@ -1496,7 +1551,7 @@ class Plugin extends AppPlugin {
                     try {
                         const { json, js } = await this.fetchGithubRepo(url);
                         const pName = json.name || shortUrl;
-                        const result = await this.installPlugin(json, js);
+                        const result = await this.installPlugin(json, js, { interactive: !isFullOverride });
                         if (result === 'skipped') { skippedNames.push(pName); }
                         else { successCount++; }
                     } catch (e) {
@@ -1509,6 +1564,7 @@ class Plugin extends AppPlugin {
             document.body.removeChild(tempDiv);
             this._importModal = null;
             const parts = [`Installed: ${successCount}`];
+            if (deletedCount > 0) parts.push(`Deleted: ${deletedCount}`);
             if (skippedNames.length > 0) parts.push(`Skipped: ${skippedNames.join(', ')}`);
             if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
             this.ui.addToaster({
