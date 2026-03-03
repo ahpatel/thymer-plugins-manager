@@ -3,6 +3,7 @@ class Plugin extends AppPlugin {
     onLoad() {
         this.githubPat = localStorage.getItem('pm_github_pat') || '';
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
+        this._updateIntervalId = null;
 
         // Register the panel type
         this.ui.registerCustomPanelType("plugin-manager-panel", (panel) => {
@@ -26,6 +27,15 @@ class Plugin extends AppPlugin {
         this.startAutomatedUpdateChecker();
     }
 
+    onUnload() {
+        // Clean up interval to prevent memory leaks
+        if (this._updateIntervalId) {
+            clearInterval(this._updateIntervalId);
+            this._updateIntervalId = null;
+        }
+        this._discoverItems = null;
+    }
+
     async startAutomatedUpdateChecker() {
         // Run daily
         const lastCheck = localStorage.getItem('pm_last_update_check');
@@ -36,7 +46,7 @@ class Plugin extends AppPlugin {
         }
 
         // Setup interval to check every 12 hours while open
-        setInterval(() => this.checkForAllUpdatesInBackground(), 12 * 60 * 60 * 1000);
+        this._updateIntervalId = setInterval(() => this.checkForAllUpdatesInBackground(), 12 * 60 * 60 * 1000);
     }
 
     async checkForAllUpdatesInBackground() {
@@ -351,11 +361,11 @@ class Plugin extends AppPlugin {
             card.innerHTML = `
                 <div class="pm-card-info">
                     <h3>
-                        ${item.name} 
+                        ${this._escHtml(item.name)} 
                         <span class="pm-badge ${badgeClass}">${badgeText}</span>
                     </h3>
-                    <p>${item.description}</p>
-                    <p style="margin-top: 5px; font-size: 11px;"><a href="${item.url}" target="_blank">${item.url}</a></p>
+                    <p>${this._escHtml(item.description)}</p>
+                    <p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(item.url)}" target="_blank" rel="noopener noreferrer">${this._escHtml(item.url)}</a></p>
                 </div>
                 <div class="pm-card-actions"></div>
             `;
@@ -458,12 +468,12 @@ class Plugin extends AppPlugin {
             card.innerHTML = `
                 <div class="pm-card-info">
                     <h3 id="pm-title-${p.getGuid()}">
-                        ${conf.name || 'Unnamed Plugin'} 
+                        ${this._escHtml(conf.name || 'Unnamed Plugin')} 
                         <span class="pm-badge" id="pm-badge-type-${p.getGuid()}"></span>
-                        <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${conf.version || '0.0.0'}</span>
+                        <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || '0.0.0')}</span>
                     </h3>
-                    <p>${conf.description || 'No description'}</p>
-                    ${sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><a href="${sourceRepo}" target="_blank">${sourceRepo}</a></p>` : ''}
+                    <p>${this._escHtml(conf.description || 'No description')}</p>
+                    ${sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(sourceRepo)}" target="_blank" rel="noopener noreferrer">${this._escHtml(sourceRepo)}</a></p>` : ''}
                 </div>
                 <div class="pm-card-actions"></div>
             `;
@@ -649,7 +659,7 @@ class Plugin extends AppPlugin {
                     <div class="pm-modal-content" style="width: 800px; max-height: 90vh; overflow-y: auto;">
                         <h3>Theme Preview</h3>
                         <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px;">
-                            ${images.map(img => `<img src="${img}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--border-default, #333);" />`).join('')}
+                            ${images.map(img => `<img src="${this._escHtml(img)}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--border-default, #333);" />`).join('')}
                         </div>
                         <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
                             <button class="pm-btn primary" id="pm-close-preview">Close</button>
@@ -672,19 +682,18 @@ class Plugin extends AppPlugin {
     }
 
     /**
-     * Fetch theme CSS directly from raw.githubusercontent.com to avoid CORS issues
-     * with api.github.com. Tries common CSS filenames.
+     * Fetch theme CSS using smart file discovery.
      */
     async _fetchThemeCSS(repoUrl) {
         const { owner, repo, subpath } = this._parseGithubUrl(repoUrl);
         if (!owner || !repo) throw new Error("Invalid GitHub URL.");
 
-        const basePath = subpath || '';
+        const prefix = subpath ? `${subpath}/` : '';
         const cssFilenames = ['plugin.css', 'styles.css', 'theme.css', 'style.css'];
 
+        // Strategy 1: Try common CSS filenames via raw.githubusercontent.com
         for (const branch of ['main', 'master']) {
             for (const filename of cssFilenames) {
-                const prefix = basePath ? `${basePath}/` : '';
                 const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}${filename}`;
                 try {
                     const res = await fetch(url);
@@ -693,7 +702,36 @@ class Plugin extends AppPlugin {
             }
         }
 
-        throw new Error("No CSS file found. Tried: " + cssFilenames.join(', '));
+        // Strategy 2: Use GitHub API to list directory and find CSS-like files
+        try {
+            const files = await this._listRepoDirectory(owner, repo, subpath);
+            const cssFile = this._findFileByRole(files, 'css');
+            if (cssFile) {
+                const res = await fetch(cssFile.download_url);
+                if (res.ok) return await res.text();
+            }
+        } catch (e) { /* fall through */ }
+
+        throw new Error("No CSS file found in this repository.");
+    }
+
+    // --- Utilities ---
+
+    /** Escape HTML entities to prevent XSS when injecting user-controlled strings into innerHTML */
+    _escHtml(str) {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+    }
+
+    /** Validate that a URL points to github.com */
+    _isValidGithubUrl(url) {
+        try {
+            const parsed = new URL(url);
+            return parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com';
+        } catch (e) {
+            return false;
+        }
     }
 
     // --- GitHub Utils ---
@@ -703,19 +741,108 @@ class Plugin extends AppPlugin {
      * Supports:
      *   https://github.com/user/repo
      *   https://github.com/user/repo/tree/branch/path/to/subfolder
+     *   https://github.com/user/repo/tree/branch/path/to/file.json  (extracts parent dir)
+     *   https://github.com/user/repo/blob/branch/path/to/file.json  (extracts parent dir)
+     *   https://github.com/user/repo/releases  (strips to owner/repo)
+     *   https://github.com/user/repo/issues, /pulls, /wiki, etc.
      */
     _parseGithubUrl(url) {
-        // Match URLs with optional /tree/branch/subpath
-        const match = url.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/tree\/[^\/]+\/(.+?))?\/?$/);
-        if (!match) return { owner: null, repo: null, subpath: '' };
+        // First, strip known GitHub page paths that don't point to code
+        const githubPages = /\/(releases|issues|pulls|wiki|actions|settings|discussions|tags|commit|compare|security|projects|milestones|labels|pulse|graphs|network|community)(\/.*)?$/;
+        const cleanUrl = url.replace(githubPages, '');
+
+        // Match URLs with /tree/ or /blob/ paths
+        const treeMatch = cleanUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/(?:tree|blob)\/[^\/]+\/(.+?))?\/?\s*$/);
+        if (!treeMatch) return { owner: null, repo: null, subpath: '' };
+
+        let subpath = treeMatch[3] || '';
+
+        // If subpath ends with a file extension, strip the filename to get its directory
+        if (subpath && /\.[a-zA-Z0-9]+$/.test(subpath)) {
+            const lastSlash = subpath.lastIndexOf('/');
+            subpath = lastSlash > 0 ? subpath.substring(0, lastSlash) : '';
+        }
+
         return {
-            owner: match[1],
-            repo: match[2],
-            subpath: match[3] || ''
+            owner: treeMatch[1],
+            repo: treeMatch[2],
+            subpath: subpath
         };
     }
 
+    /**
+     * List files in a GitHub repository directory via the API.
+     * Falls back through branches (main, master).
+     */
+    async _listRepoDirectory(owner, repo, subpath) {
+        const headers = {};
+        if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
+
+        const path = subpath || '';
+        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+
+        const res = await fetch(apiUrl, { headers });
+        if (!res.ok) throw new Error(`Could not list directory: ${owner}/${repo}/${path}`);
+
+        const files = await res.json();
+        if (!Array.isArray(files)) throw new Error("Path is not a directory");
+        return files;
+    }
+
+    /**
+     * Intelligently find a file by its role (json, js, css) from a directory listing.
+     *
+     * Priority order:
+     * 1. Exact standard names: plugin.json, plugin.js, plugin.css
+     * 2. Files with `-plugin` suffix: clock-plugin.json, clock-plugin.js
+     * 3. Files with correct extension: *.json, *.js, *.css
+     * 4. Extensionless Thymer export files by name heuristic:
+     *    - json: "Config" or any file whose content parses as JSON
+     *    - js:   "Custom Code" or file containing "extends AppPlugin"/"extends CollectionPlugin"
+     *    - css:  "Custom CSS" or "Custom Style"
+     */
+    _findFileByRole(files, role) {
+        const onlyFiles = files.filter(f => f.type === 'file');
+
+        const extMap = { json: '.json', js: '.js', css: '.css' };
+        const stdName = `plugin${extMap[role]}`;
+
+        // 1. Exact standard name
+        const exact = onlyFiles.find(f => f.name.toLowerCase() === stdName);
+        if (exact) return exact;
+
+        // 2. Files with *-plugin suffix
+        const pluginSuffix = onlyFiles.find(f => f.name.toLowerCase().endsWith(`-plugin${extMap[role]}`));
+        if (pluginSuffix) return pluginSuffix;
+
+        // 3. Files with the correct extension
+        const byExt = onlyFiles.filter(f => f.name.toLowerCase().endsWith(extMap[role]));
+        if (byExt.length === 1) return byExt[0]; // Unambiguous single match
+        // If multiple, prefer one containing 'plugin' in the name
+        if (byExt.length > 1) {
+            const withPlugin = byExt.find(f => f.name.toLowerCase().includes('plugin'));
+            if (withPlugin) return withPlugin;
+            return byExt[0]; // Fallback to first
+        }
+
+        // 4. Extensionless files by naming convention (e.g., Thymer export format)
+        const nameHeuristics = {
+            json: ['config'],
+            js: ['custom code', 'code'],
+            css: ['custom css', 'custom style', 'style', 'css']
+        };
+
+        const heuristic = nameHeuristics[role] || [];
+        for (const hint of heuristic) {
+            const match = onlyFiles.find(f => f.name.toLowerCase() === hint && !f.name.includes('.'));
+            if (match) return match;
+        }
+
+        return null;
+    }
+
     async fetchGithubRepo(url) {
+        if (!this._isValidGithubUrl(url)) throw new Error("URL must point to github.com");
         const { owner, repo, subpath } = this._parseGithubUrl(url);
         if (!owner || !repo) throw new Error("Invalid GitHub URL. Expected format: https://github.com/user/repo");
 
@@ -725,36 +852,73 @@ class Plugin extends AppPlugin {
         }
 
         const prefix = subpath ? `${subpath}/` : '';
+        const label = `${owner}/${repo}${subpath ? '/' + subpath : ''}`;
 
-        // Try to fetch plugin.json from main then master
-        let branch = 'main';
-        let jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.json`;
-        let jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
+        // ----- Strategy 1: Try standard filenames via raw.githubusercontent.com (fast, no CORS issues) -----
+        for (const branch of ['main', 'master']) {
+            const jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.json`;
+            const jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
 
-        let jsonRes = await fetch(jsonUrl, { headers });
-        if (!jsonRes.ok) {
-            branch = 'master';
-            jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.json`;
-            jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
-            jsonRes = await fetch(jsonUrl, { headers });
+            try {
+                const jsonRes = await fetch(jsonUrl, { headers });
+                if (jsonRes.ok) {
+                    const pluginJson = await jsonRes.json();
+                    const jsRes = await fetch(jsUrl, { headers });
+                    if (jsRes.ok) {
+                        const pluginJs = await jsRes.text();
+                        pluginJson.__source_repo = url;
+                        return { json: pluginJson, js: pluginJs };
+                    }
+                }
+            } catch (e) { /* try next branch */ }
         }
 
-        if (!jsonRes.ok) throw new Error(`Could not find plugin.json on main or master branches in ${owner}/${repo}${subpath ? '/' + subpath : ''}`);
+        // ----- Strategy 2: Use GitHub API to discover files in the directory -----
+        let files;
+        try {
+            files = await this._listRepoDirectory(owner, repo, subpath);
+        } catch (e) {
+            throw new Error(`Could not find plugin files in ${label}. Standard names (plugin.json/plugin.js) not found, and directory listing failed.`);
+        }
 
-        const pluginJson = await jsonRes.json();
+        // Find the JSON config file
+        const jsonFile = this._findFileByRole(files, 'json');
+        if (!jsonFile) throw new Error(`No config file (.json) found in ${label}`);
 
-        const jsRes = await fetch(jsUrl, { headers });
-        if (!jsRes.ok) throw new Error(`Could not find plugin.js in ${owner}/${repo}${subpath ? '/' + subpath : ''}`);
+        // Find the JS code file
+        const jsFile = this._findFileByRole(files, 'js');
+        if (!jsFile) throw new Error(`No code file (.js) found in ${label}`);
 
+        // Fetch the actual file contents
+        const jsonRes = await fetch(jsonFile.download_url, { headers });
+        if (!jsonRes.ok) throw new Error(`Failed to download ${jsonFile.name}`);
+
+        let pluginJson;
+        const jsonText = await jsonRes.text();
+        try {
+            pluginJson = JSON.parse(jsonText);
+        } catch (e) {
+            throw new Error(`${jsonFile.name} is not valid JSON`);
+        }
+
+        const jsRes = await fetch(jsFile.download_url, { headers });
+        if (!jsRes.ok) throw new Error(`Failed to download ${jsFile.name}`);
         const pluginJs = await jsRes.text();
 
-        // Store the repo URL as source (use the original GitHub URL, not raw.githubusercontent.com)
+        // Optionally grab CSS
+        const cssFile = this._findFileByRole(files, 'css');
+
         pluginJson.__source_repo = url;
 
-        return {
-            json: pluginJson,
-            js: pluginJs
-        };
+        const result = { json: pluginJson, js: pluginJs };
+        if (cssFile) {
+            try {
+                const cssRes = await fetch(cssFile.download_url, { headers });
+                if (cssRes.ok) result.css = await cssRes.text();
+            } catch (e) { /* CSS is optional */ }
+        }
+
+        return result;
     }
 
     // --- Core Features ---
@@ -792,6 +956,12 @@ class Plugin extends AppPlugin {
     }
 
     async installPlugin(jsonConf, jsCode) {
+        // Skip the Plugin Manager itself — it doesn't need to be reinstalled
+        const name = (jsonConf.name || '').toLowerCase();
+        if (name === 'plugin manager' || name === 'plugins manager') {
+            return 'skipped';
+        }
+
         // Check for duplicates
         const allGlobals = await this.data.getAllGlobalPlugins();
         const allCollections = await this.data.getAllCollections();
@@ -809,10 +979,11 @@ class Plugin extends AppPlugin {
         let targetPlugin = null;
 
         if (existingPlugin) {
-            if (confirm(`A plugin named "${jsonConf.name}" already exists in the workspace. Do you want to update/overwrite it with this imported version?`)) {
+            if (confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
                 targetPlugin = existingPlugin;
             } else {
-                throw new Error("Installation cancelled by user.");
+                // Don't throw — return 'skipped' so batch imports can continue
+                return 'skipped';
             }
         }
 
@@ -891,6 +1062,7 @@ class Plugin extends AppPlugin {
 
             let successCount = 0;
             let failCount = 0;
+            let skipCount = 0;
 
             if (val.startsWith('[')) {
                 // JSON full backup import
@@ -898,15 +1070,9 @@ class Plugin extends AppPlugin {
                     const parsed = JSON.parse(val);
                     for (const p of parsed) {
                         try {
-                            const isGlobal = p.type === 'app' || p.type === 'global';
-                            const filterIsGlobal = typeFilter === 'app';
-                            if (isGlobal !== filterIsGlobal) {
-                                console.warn(`Skipping ${p.name}: Wrong type`);
-                                failCount++;
-                                continue;
-                            }
-                            await this.installPlugin(p.json, p.code);
-                            successCount++;
+                            const result = await this.installPlugin(p.json, p.code);
+                            if (result === 'skipped') { skipCount++; }
+                            else { successCount++; }
                         } catch (e) {
                             console.error(e);
                             failCount++;
@@ -923,23 +1089,9 @@ class Plugin extends AppPlugin {
                 for (const url of urls) {
                     try {
                         const { json, js } = await this.fetchGithubRepo(url);
-
-                        let pType = json.type;
-                        if (!pType) {
-                            if (js.includes("extends AppPlugin")) pType = "app";
-                            else if (js.includes("extends CollectionPlugin")) pType = "collection";
-                        }
-
-                        const isGlobal = pType === 'app' || pType === 'global';
-                        const filterIsGlobal = typeFilter === 'app';
-                        if (isGlobal !== filterIsGlobal) {
-                            console.warn(`Skipping ${json.name}: Wrong type`);
-                            failCount++;
-                            continue;
-                        }
-
-                        await this.installPlugin(json, js);
-                        successCount++;
+                        const result = await this.installPlugin(json, js);
+                        if (result === 'skipped') { skipCount++; }
+                        else { successCount++; }
                     } catch (e) {
                         console.error(e);
                         failCount++;
@@ -948,9 +1100,12 @@ class Plugin extends AppPlugin {
             }
 
             document.body.removeChild(tempDiv);
+            const parts = [`Installed: ${successCount}`];
+            if (skipCount > 0) parts.push(`Skipped: ${skipCount}`);
+            if (failCount > 0) parts.push(`Failed: ${failCount}`);
             this.ui.addToaster({
                 title: "Import Complete",
-                message: `Successfully installed ${successCount}. Failed: ${failCount}`,
+                message: parts.join('. '),
                 dismissible: true,
                 autoDestroyTime: 5000
             });
