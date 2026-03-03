@@ -481,8 +481,9 @@ class Plugin extends AppPlugin {
                 installBtn.disabled = true;
                 installBtn.style.opacity = '0.5';
             } else if (isTheme) {
-                installBtn.className = 'pm-btn primary';
-                installBtn.innerText = 'Copy CSS';
+                const isSavedTheme = this._savedThemes.some(t => t.source === item.url || t.name === item.name);
+                installBtn.className = isSavedTheme ? 'pm-btn' : 'pm-btn primary';
+                installBtn.innerText = isSavedTheme ? 'Re-Save Theme' : 'Save Theme';
             } else if (isInstalled) {
                 installBtn.className = 'pm-btn';
                 installBtn.innerText = 'Reinstall';
@@ -531,9 +532,26 @@ class Plugin extends AppPlugin {
                     try {
                         if (isTheme) {
                             const cssText = await this._fetchThemeCSS(item.url);
-                            await navigator.clipboard.writeText(cssText);
-                            this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
-                            installBtn.innerText = 'Copied';
+                            const existingIdx = this._savedThemes.findIndex(t => t.source === item.url || t.name === item.name);
+
+                            if (existingIdx > -1) {
+                                this._savedThemes[existingIdx].css = cssText;
+                                this._savedThemes[existingIdx].date = new Date().toISOString();
+                            } else {
+                                this._savedThemes.push({
+                                    id: Date.now().toString(36),
+                                    name: item.name,
+                                    css: cssText,
+                                    source: item.url,
+                                    date: new Date().toISOString()
+                                });
+                            }
+                            this._saveThemes();
+                            this._autoExport();
+                            this.ui.addToaster({ title: "Theme Saved!", message: `Saved "${item.name}" to your Theme Library.`, autoDestroyTime: 4000, dismissible: true });
+
+                            installBtn.className = 'pm-btn';
+                            installBtn.innerText = 'Saved';
                         } else {
                             const { json, js } = await this.fetchGithubRepo(item.url);
                             await this.installPlugin(json, js);
@@ -1033,6 +1051,19 @@ class Plugin extends AppPlugin {
         return [...globalsData, ...collectionsData].filter(Boolean);
     }
 
+    /** Get the current workspace name from the hostname */
+    _getWorkspaceName() {
+        try {
+            if (window.location && window.location.hostname) {
+                const parts = window.location.hostname.split('.');
+                if (parts.length > 0 && parts[0] !== 'localhost' && parts[0] !== '127') {
+                    return parts[0];
+                }
+            }
+        } catch (e) { }
+        return 'workspace';
+    }
+
     /** Auto-export full backup to chosen directory */
     async _autoExport() {
         if (!this._autoExportEnabled) return;
@@ -1050,8 +1081,10 @@ class Plugin extends AppPlugin {
             const data = await this._getExportData();
             const jsonStr = JSON.stringify(data, null, 2);
             const now = new Date();
-            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const filename = `thymer-plugins-backup-${timestamp}.json`;
+            const pad = (n) => String(n).padStart(2, '0');
+            const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+            const wsName = this._getWorkspaceName();
+            const filename = `thymer-plugins-backup-${wsName}-${ts}.json`;
             const fileHandle = await this._autoExportDirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(jsonStr);
@@ -1714,7 +1747,7 @@ class Plugin extends AppPlugin {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `thymer-${typeFilter}-urls.txt`;
+            a.download = `thymer-${typeFilter}-urls-${this._getWorkspaceName()}.txt`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1726,7 +1759,11 @@ class Plugin extends AppPlugin {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `thymer-${typeFilter}-backup.json`;
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+            const wsName = this._getWorkspaceName();
+            a.download = `thymer-plugins-backup-${wsName}-${ts}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
