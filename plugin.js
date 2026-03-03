@@ -5,6 +5,11 @@ class Plugin extends AppPlugin {
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
         this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}');
+        this._autoExportEnabled = localStorage.getItem('pm_auto_export') === 'true';
+        this._autoExportDirHandle = null;
+        this._autoExportDirName = localStorage.getItem('pm_auto_export_dir_name') || '';
+        // Restore directory handle from IndexedDB
+        this._restoreAutoExportHandle();
 
         // Register the panel type
         this.ui.registerCustomPanelType("plugin-manager-panel", (panel) => {
@@ -157,7 +162,21 @@ class Plugin extends AppPlugin {
                                 <textarea id="pm-repos-input" class="pm-textarea" style="min-height: 80px;" placeholder="https://raw.githubusercontent.com/.../README.md">${this.communityRepos}</textarea>
                             </div>
 
-                            <button type="button" class="pm-btn primary" id="pm-save-settings">Save Settings</button>
+                            <div class="pm-input-group" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-default, #333);">
+                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" id="pm-auto-export-toggle" ${this._autoExportEnabled ? 'checked' : ''} />
+                                    Auto-Export Backup on Changes
+                                </label>
+                                <p style="font-size: 13px; color: var(--text-color-secondary, #999); margin: 8px 0;">
+                                    Automatically save a full JSON backup whenever plugins or collections are installed, updated, or deleted.
+                                </p>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <button type="button" class="pm-btn" id="pm-auto-export-dir-btn">Choose Directory</button>
+                                    <span id="pm-auto-export-dir-label" style="font-size: 13px; color: var(--text-muted, #999);">${this._autoExportDirName ? '📁 ' + this._autoExportDirName : 'No directory selected'}</span>
+                                </div>
+                            </div>
+
+                            <button type="button" class="pm-btn primary" id="pm-save-settings" style="margin-top: 20px;">Save Settings</button>
                         </form>
                     </div>
                 </div>
@@ -193,7 +212,37 @@ class Plugin extends AppPlugin {
             localStorage.setItem('pm_community_repos', repos);
             this.githubPat = pat;
             localStorage.setItem('pm_github_pat', pat);
+
+            const autoExport = container.querySelector('#pm-auto-export-toggle').checked;
+            this._autoExportEnabled = autoExport;
+            localStorage.setItem('pm_auto_export', autoExport ? 'true' : 'false');
+
             this.ui.addToaster({ title: "Settings Saved", dismissible: true, autoDestroyTime: 3000 });
+        });
+
+        // Auto-export directory picker
+        container.querySelector('#pm-auto-export-dir-btn').addEventListener('click', async () => {
+            try {
+                if (!window.showDirectoryPicker) {
+                    this.ui.addToaster({ title: "Not Supported", message: "Your browser does not support the File System Access API. Try Chrome or Edge.", autoDestroyTime: 5000, dismissible: true });
+                    return;
+                }
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                this._autoExportDirHandle = handle;
+                this._autoExportDirName = handle.name;
+                localStorage.setItem('pm_auto_export_dir_name', handle.name);
+                await this._storeAutoExportHandle(handle);
+                container.querySelector('#pm-auto-export-dir-label').textContent = '📁 ' + handle.name;
+                // Auto-enable the toggle
+                container.querySelector('#pm-auto-export-toggle').checked = true;
+                this._autoExportEnabled = true;
+                localStorage.setItem('pm_auto_export', 'true');
+                this.ui.addToaster({ title: "Directory Set", message: `Backups will save to: ${handle.name}`, autoDestroyTime: 3000, dismissible: true });
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    this.ui.addToaster({ title: "Directory Selection Failed", message: e.message, autoDestroyTime: 4000, dismissible: true });
+                }
+            }
         });
 
 
@@ -758,6 +807,84 @@ class Plugin extends AppPlugin {
         throw new Error("No CSS file found in this repository.");
     }
 
+    // --- Auto-Export ---
+
+    /** Get a reusable export data array for all plugins + collections */
+    async _getExportData() {
+        const allGlobals = await this.data.getAllGlobalPlugins();
+        const allCollections = await this.data.getAllCollections();
+        return [...allGlobals, ...allCollections].map(p => {
+            try {
+                const { json, code } = p.getExistingCodeAndConfig();
+                return { name: json.name, type: json.type, version: json.version, source_repo: json.__source_repo, code, json };
+            } catch (e) { return null; }
+        }).filter(Boolean);
+    }
+
+    /** Auto-export full backup to chosen directory */
+    async _autoExport() {
+        if (!this._autoExportEnabled) return;
+        if (!this._autoExportDirHandle) {
+            console.warn('[Plugin Manager] Auto-export enabled but no directory handle available.');
+            return;
+        }
+        try {
+            // Re-verify permission (may prompt user once per session)
+            const perm = await this._autoExportDirHandle.requestPermission({ mode: 'readwrite' });
+            if (perm !== 'granted') {
+                console.warn('[Plugin Manager] Auto-export: write permission denied.');
+                return;
+            }
+            const data = await this._getExportData();
+            const jsonStr = JSON.stringify(data, null, 2);
+            const filename = `thymer-plugins-backup.json`;
+            const fileHandle = await this._autoExportDirHandle.getFileHandle(filename, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(jsonStr);
+            await writable.close();
+            console.log(`[Plugin Manager] Auto-exported backup to ${this._autoExportDirName}/${filename}`);
+        } catch (e) {
+            console.error('[Plugin Manager] Auto-export failed:', e);
+        }
+    }
+
+    /** Store directory handle in IndexedDB for persistence across sessions */
+    async _storeAutoExportHandle(handle) {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('plugin-manager-db', 1);
+            req.onupgradeneeded = (e) => { e.target.result.createObjectStore('handles'); };
+            req.onsuccess = (e) => {
+                const db = e.target.result;
+                const tx = db.transaction('handles', 'readwrite');
+                tx.objectStore('handles').put(handle, 'autoExportDir');
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            };
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    /** Restore directory handle from IndexedDB */
+    async _restoreAutoExportHandle() {
+        try {
+            const handle = await new Promise((resolve, reject) => {
+                const req = indexedDB.open('plugin-manager-db', 1);
+                req.onupgradeneeded = (e) => { e.target.result.createObjectStore('handles'); };
+                req.onsuccess = (e) => {
+                    const db = e.target.result;
+                    const tx = db.transaction('handles', 'readonly');
+                    const getReq = tx.objectStore('handles').get('autoExportDir');
+                    getReq.onsuccess = () => resolve(getReq.result || null);
+                    getReq.onerror = () => reject(getReq.error);
+                };
+                req.onerror = () => reject(req.error);
+            });
+            if (handle) this._autoExportDirHandle = handle;
+        } catch (e) {
+            console.warn('[Plugin Manager] Could not restore auto-export directory handle:', e);
+        }
+    }
+
     // --- Utilities ---
 
     /** Escape HTML entities to prevent XSS when injecting user-controlled strings into innerHTML */
@@ -1057,7 +1184,22 @@ class Plugin extends AppPlugin {
             if (!targetPlugin) throw new Error("Failed to create plugin container in workspace.");
         }
 
+        // Validate JS before saving — catch issues that would crash Thymer's runtime
+        if (jsCode) {
+            // Check for ES module syntax (import/export) which Thymer can't run via new Function()
+            if (/^\s*import\s+/m.test(jsCode) || /^\s*export\s+/m.test(jsCode)) {
+                throw new Error(`"${jsonConf.name || 'Unknown'}" uses ES module syntax (import/export) which is not compatible with Thymer's plugin system.`);
+            }
+            // Try to compile the JS to catch syntax errors before saving
+            try {
+                new Function(jsCode);
+            } catch (syntaxErr) {
+                throw new Error(`"${jsonConf.name || 'Unknown'}" has a code error: ${syntaxErr.message}`);
+            }
+        }
+
         await targetPlugin.savePlugin(jsonConf, jsCode);
+        this._autoExport();  // fire-and-forget
         return targetPlugin;
     }
 
@@ -1201,6 +1343,7 @@ class Plugin extends AppPlugin {
                 // Local modifications warning check (simple length/hash comparison could go here in future)
                 if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
                     await pluginObj.savePlugin(remoteJson, remoteJs);
+                    this._autoExport();  // fire-and-forget
                     this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
                     this.loadPlugins(container);
                 }
