@@ -991,19 +991,24 @@ class Plugin extends AppPlugin {
             // Attempt to derive the type if it's missing in plugin.json
             let pType = jsonConf.type;
             if (!pType) {
-                if (jsCode.includes("extends AppPlugin")) {
+                // Check for class extension patterns (handles various whitespace/formatting)
+                if (/extends\s+AppPlugin/.test(jsCode)) {
                     pType = "app";
-                } else if (jsCode.includes("extends CollectionPlugin")) {
+                } else if (/extends\s+CollectionPlugin/.test(jsCode)) {
                     pType = "collection";
                 }
+            }
+
+            // If still unknown, ask the user
+            if (!pType || (pType !== 'app' && pType !== 'global' && pType !== 'collection')) {
+                const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Global Plugin, or Cancel for Collection Plugin.`);
+                pType = choice ? 'app' : 'collection';
             }
 
             if (pType === 'app' || pType === 'global') {
                 targetPlugin = await this.data.createGlobalPlugin();
             } else if (pType === 'collection') {
                 targetPlugin = await this.data.createCollection();
-            } else {
-                throw new Error(`Unknown plugin type: ${pType || 'undefined'}. Ensure plugin.json has a "type" field or plugin.js extends AppPlugin/CollectionPlugin.`);
             }
 
             if (!targetPlugin) throw new Error("Failed to create plugin container in workspace.");
@@ -1061,21 +1066,22 @@ class Plugin extends AppPlugin {
             document.getElementById('pm-import-confirm').disabled = true;
 
             let successCount = 0;
-            let failCount = 0;
-            let skipCount = 0;
+            let failedNames = [];
+            let skippedNames = [];
 
             if (val.startsWith('[')) {
                 // JSON full backup import
                 try {
                     const parsed = JSON.parse(val);
                     for (const p of parsed) {
+                        const pName = (p.json && p.json.name) || p.name || 'Unknown';
                         try {
                             const result = await this.installPlugin(p.json, p.code);
-                            if (result === 'skipped') { skipCount++; }
+                            if (result === 'skipped') { skippedNames.push(pName); }
                             else { successCount++; }
                         } catch (e) {
                             console.error(e);
-                            failCount++;
+                            failedNames.push(pName);
                         }
                     }
                 } catch (e) {
@@ -1087,27 +1093,29 @@ class Plugin extends AppPlugin {
                 // URLs import
                 const urls = val.split('\n').map(u => u.trim()).filter(Boolean);
                 for (const url of urls) {
+                    const shortUrl = url.replace(/https?:\/\/github\.com\//, '');
                     try {
                         const { json, js } = await this.fetchGithubRepo(url);
+                        const pName = json.name || shortUrl;
                         const result = await this.installPlugin(json, js);
-                        if (result === 'skipped') { skipCount++; }
+                        if (result === 'skipped') { skippedNames.push(pName); }
                         else { successCount++; }
                     } catch (e) {
                         console.error(e);
-                        failCount++;
+                        failedNames.push(shortUrl);
                     }
                 }
             }
 
             document.body.removeChild(tempDiv);
             const parts = [`Installed: ${successCount}`];
-            if (skipCount > 0) parts.push(`Skipped: ${skipCount}`);
-            if (failCount > 0) parts.push(`Failed: ${failCount}`);
+            if (skippedNames.length > 0) parts.push(`Skipped: ${skippedNames.join(', ')}`);
+            if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
             this.ui.addToaster({
                 title: "Import Complete",
                 message: parts.join('. '),
                 dismissible: true,
-                autoDestroyTime: 5000
+                autoDestroyTime: failedNames.length > 0 ? 8000 : 5000
             });
             this.loadPlugins(container);
         });
