@@ -618,6 +618,44 @@ class Plugin extends AppPlugin {
                 actionsContainer.appendChild(updateBtn);
 
                 updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
+            } else {
+                // Local plugin — offer to link a GitHub repo for updates
+                const linkBtn = document.createElement('button');
+                linkBtn.className = 'pm-btn';
+                linkBtn.title = 'Link to a GitHub repo for updates';
+                linkBtn.appendChild(this.ui.createIcon('link'));
+                actionsContainer.appendChild(linkBtn);
+
+                linkBtn.addEventListener('click', async () => {
+                    const repoUrl = prompt('Enter the GitHub repo URL for this plugin:');
+                    if (!repoUrl) return;
+                    if (!this._isValidGithubUrl(repoUrl)) {
+                        this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
+                        return;
+                    }
+                    try {
+                        const { json: currentJson, code: currentCode } = p.getExistingCodeAndConfig();
+                        currentJson.__source_repo = repoUrl;
+                        await p.savePlugin(currentJson, currentCode);
+
+                        // Update card in-place instead of full re-render (avoids panel-reload race)
+                        actionsContainer.removeChild(linkBtn);
+                        const newUpdateBtn = document.createElement('button');
+                        newUpdateBtn.className = 'pm-btn pm-btn-update';
+                        newUpdateBtn.title = 'Check Update';
+                        newUpdateBtn.appendChild(this.ui.createIcon('refresh'));
+                        actionsContainer.insertBefore(newUpdateBtn, actionsContainer.firstChild);
+                        newUpdateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, currentJson, repoUrl, newUpdateBtn, panelContainer));
+
+                        // Swap badge to GitHub
+                        const badge = card.querySelector(`#pm-badge-type-${p.getGuid()}`);
+                        if (badge) { badge.innerHTML = ''; badge.appendChild(this.ui.createIcon('cloud')); badge.appendChild(document.createTextNode(' GitHub')); }
+
+                        this.ui.addToaster({ title: 'Repo Linked', message: `${conf.name} linked to ${repoUrl}. You can now check for updates.`, autoDestroyTime: 4000, dismissible: true });
+                    } catch (e) {
+                        this.ui.addToaster({ title: 'Link Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
+                    }
+                });
             }
 
             // Add Native Delete Button
