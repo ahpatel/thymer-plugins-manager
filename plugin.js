@@ -53,6 +53,11 @@ class Plugin extends AppPlugin {
             this._importModal.parentNode.removeChild(this._importModal);
             this._importModal = null;
         }
+        // Disconnect responsive resize observer
+        if (this._resizeObserver) {
+            this._resizeObserver.disconnect();
+            this._resizeObserver = null;
+        }
     }
 
     async startAutomatedUpdateChecker() {
@@ -111,11 +116,11 @@ class Plugin extends AppPlugin {
                 </div>
                 
                 <div class="pm-tabs">
-                    <div class="pm-tab active" data-tab="global">Global Plugins</div>
-                    <div class="pm-tab" data-tab="collections">Collections</div>
-                    <div class="pm-tab" data-tab="themes">Themes</div>
-                    <div class="pm-tab" data-tab="discover">Discover</div>
-                    <div class="pm-tab" data-tab="settings">Settings</div>
+                    <div class="pm-tab active" data-tab="global" title="Global Plugins"><span class="pm-tab-icon">🔌</span><span class="pm-tab-label">Global Plugins</span></div>
+                    <div class="pm-tab" data-tab="collections" title="Collections"><span class="pm-tab-icon">📁</span><span class="pm-tab-label">Collections</span></div>
+                    <div class="pm-tab" data-tab="themes" title="Themes"><span class="pm-tab-icon">🎨</span><span class="pm-tab-label">Themes</span></div>
+                    <div class="pm-tab" data-tab="discover" title="Discover"><span class="pm-tab-icon">🔍</span><span class="pm-tab-label">Discover</span></div>
+                    <div class="pm-tab" data-tab="settings" title="Settings"><span class="pm-tab-icon">⚙️</span><span class="pm-tab-label">Settings</span></div>
                 </div>
 
                 <div class="pm-tab-content active" id="tab-global">
@@ -215,18 +220,32 @@ class Plugin extends AppPlugin {
         // Tabs
         container.querySelectorAll('.pm-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
+                const clickedTab = e.currentTarget; // use currentTarget so child spans work
                 container.querySelectorAll('.pm-tab').forEach(t => t.classList.remove('active'));
                 container.querySelectorAll('.pm-tab-content').forEach(c => c.classList.remove('active'));
 
-                e.target.classList.add('active');
-                container.querySelector(`#tab-${e.target.dataset.tab}`).classList.add('active');
+                clickedTab.classList.add('active');
+                container.querySelector(`#tab-${clickedTab.dataset.tab}`).classList.add('active');
 
                 // Lazy-load Discover tab on first click
-                if (e.target.dataset.tab === 'discover' && !this._discoverItems) {
+                if (clickedTab.dataset.tab === 'discover' && !this._discoverItems) {
                     this.loadDiscoverPlugins(container);
                 }
             });
         });
+
+        // Responsive: toggle 'narrow' (icon tabs) and 'wide' (multi-col cards) based on container width
+        const pmContainer = container.querySelector('.pm-container');
+        if (pmContainer && window.ResizeObserver) {
+            this._resizeObserver = new ResizeObserver(entries => {
+                for (const entry of entries) {
+                    const w = entry.contentRect.width;
+                    pmContainer.classList.toggle('narrow', w < 520);
+                    pmContainer.classList.toggle('wide', w > 700);
+                }
+            });
+            this._resizeObserver.observe(pmContainer);
+        }
 
         // Settings
         container.querySelector('#pm-save-settings').addEventListener('click', () => {

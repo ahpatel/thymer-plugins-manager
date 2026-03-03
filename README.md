@@ -73,7 +73,7 @@ Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
 
 ## Browser Compatibility
 
-- **Chrome / Edge**: Full support including Auto-Export (File System Access API).
+- **Chrome / Edge**: Full support including Auto-Export (File System Access API flag must be enabled).
 - **Firefox / Safari**: All features except Auto-Export (File System Access API not available).
 
 ## Development
