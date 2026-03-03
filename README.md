@@ -15,15 +15,15 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 ### Discover Tab
 - **Community Plugin Browser**: Discover plugins and themes from configurable community repository README files.
 - **Search & Filter**: Filter by name, description, or category. Filter chips for App Plugins, Collections, and Themes.
-- **Theme Preview**: Preview theme screenshots directly from the plugin's README.
-- **Copy Theme CSS**: Fetch theme CSS from GitHub and copy to clipboard for pasting into Thymer's Edit Theme CSS.
+- **Theme Preview & Save**: Preview theme screenshots directly from the plugin's README, and save themes directly to your local Theme Library.
 - **Incompatible Plugin Handling**: Plugins that fail to install are automatically added to an exception list (persisted in localStorage with 30-day TTL). Greyed-out Install buttons with a manual "Recheck" option to test for newer, compatible versions.
 
 ### Import & Export
 - **Bulk Import**: Import multiple plugins via a list of GitHub URLs or a JSON backup file. Per-plugin duplicate resolution — skipping one plugin doesn't cancel the rest.
-- **Full Backup Export**: Download a complete JSON backup containing all plugin configuration and code, or export a simple URL list.
-- **Auto-Export**: Optionally auto-save a backup JSON file to a local directory whenever plugins are installed, updated, or deleted. Uses the File System Access API with directory handle persistence via IndexedDB.
-- **Theme CSS Import/Export**: Fetch theme CSS from GitHub repos or export your current theme CSS as a downloadable file.
+- **Full Override Restore**: When importing a JSON backup, optionally check "Full Override" to cleanly delete any currently installed plugins not present in the backup, restoring the exact configuration state.
+- **Full Backup Export**: Download a complete JSON backup containing all plugin configuration and code, or export a simple URL list. Export filenames automatically include the workspace subdomain and timestamp.
+- **Auto-Export**: Optionally auto-save a backup JSON file to a local directory whenever plugins are installed, updated, or deleted. Auto-exports feature timestamped and workspace-aware filenames. Uses the File System Access API.
+- **Theme Library**: A dedicated tab to manage your saved themes. Add themes via GitHub URL (with smart CSS detection) or manual paste. Combine and export all saved themes into a single CSS file.
 
 ### Security & Reliability
 - **XSS Prevention**: All user-controlled strings are HTML-escaped before DOM injection.
@@ -61,7 +61,7 @@ Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
 |-----|---------|
 | **Global Plugins** | Manage workspace-level app plugins. Install, update, delete, import, export. |
 | **Collections** | Manage collection-specific plugins. Same actions as Global Plugins. |
-| **Themes** | Import theme CSS from GitHub or export your current theme CSS. |
+| **Themes** | Manage your Theme Library. Save themes from GitHub URLs or manual paste, and export a combined CSS block. |
 | **Discover** | Browse community plugins and themes. Search, filter, install, or preview. |
 | **Settings** | Configure GitHub PAT, community repo URLs, and auto-export preferences. |
 
