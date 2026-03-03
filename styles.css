@@ -176,6 +176,56 @@
     color: white;
     border-color: #f59e0b;
 }
+.pm-badge-app {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.3);
+}
+.pm-badge-collection {
+    background: rgba(139, 92, 246, 0.15);
+    color: #a78bfa;
+    border-color: rgba(139, 92, 246, 0.3);
+}
+.pm-badge-theme {
+    background: rgba(236, 72, 153, 0.15);
+    color: #f472b6;
+    border-color: rgba(236, 72, 153, 0.3);
+}
+.pm-search-input {
+    flex: 1;
+    min-width: 200px;
+    max-width: 300px;
+}
+.pm-filter-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.pm-filter-chip {
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid var(--border-default, #333);
+    background: transparent;
+    color: var(--text-muted, #999);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+.pm-filter-chip:hover {
+    background: var(--bg-hover, #2a2a2a);
+    color: var(--text-color, #fff);
+}
+.pm-filter-chip.active {
+    background: var(--enum-blue-bg, #3b82f6);
+    color: white;
+    border-color: var(--enum-blue-bg, #3b82f6);
+}
+.pm-empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px 20px;
+}
 
 .pm-modal {
     position: fixed;

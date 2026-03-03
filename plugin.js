@@ -1,9 +1,9 @@
 class Plugin extends AppPlugin {
-    
+
     onLoad() {
         this.githubPat = localStorage.getItem('pm_github_pat') || '';
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
-        
+
         // Register the panel type
         this.ui.registerCustomPanelType("plugin-manager-panel", (panel) => {
             this.renderUI(panel);
@@ -21,11 +21,11 @@ class Plugin extends AppPlugin {
                 }
             }
         });
-        
+
         // Start automated update checker
         this.startAutomatedUpdateChecker();
     }
-    
+
     async startAutomatedUpdateChecker() {
         // Run daily
         const lastCheck = localStorage.getItem('pm_last_update_check');
@@ -34,18 +34,18 @@ class Plugin extends AppPlugin {
             await this.checkForAllUpdatesInBackground();
             localStorage.setItem('pm_last_update_check', now.toString());
         }
-        
+
         // Setup interval to check every 12 hours while open
         setInterval(() => this.checkForAllUpdatesInBackground(), 12 * 60 * 60 * 1000);
     }
-    
+
     async checkForAllUpdatesInBackground() {
         try {
             const updatesAvailable = {};
             const allGlobals = await this.data.getAllGlobalPlugins();
             const allCollections = await this.data.getAllCollections();
             const allPlugins = [...allGlobals, ...allCollections];
-            
+
             for (const p of allPlugins) {
                 try {
                     const { json } = p.getExistingCodeAndConfig();
@@ -56,11 +56,11 @@ class Plugin extends AppPlugin {
                             updatesAvailable[p.getGuid()] = remoteJson.version;
                         }
                     }
-                } catch(e) { /* ignore individual plugin errors in background */ }
+                } catch (e) { /* ignore individual plugin errors in background */ }
             }
-            
+
             localStorage.setItem('pm_updates_available', JSON.stringify(updatesAvailable));
-        } catch(e) {
+        } catch (e) {
             console.error("Background update check failed", e);
         }
     }
@@ -101,8 +101,14 @@ class Plugin extends AppPlugin {
                 
                 
                 <div class="pm-tab-content" id="tab-discover">
-                    <div class="pm-tab-actions" style="justify-content: space-between; align-items: center;">
-                        <span style="font-size: 13px; color: var(--text-muted, #999);">Community Plugins and Themes</span>
+                    <div class="pm-tab-actions" style="flex-wrap: wrap; gap: 10px; align-items: center;">
+                        <input type="text" id="pm-discover-search" class="pm-input pm-search-input" placeholder="Search plugins, themes..." autocomplete="off" />
+                        <div class="pm-filter-chips">
+                            <button class="pm-filter-chip active" data-filter="all">All</button>
+                            <button class="pm-filter-chip" data-filter="app">App Plugins</button>
+                            <button class="pm-filter-chip" data-filter="collection">Collections</button>
+                            <button class="pm-filter-chip" data-filter="theme">Themes</button>
+                        </div>
                         <button class="pm-btn" id="pm-refresh-discover-btn">Refresh List</button>
                     </div>
                     <div id="pm-discover-list" class="pm-list-container">Loading...</div>
@@ -162,7 +168,7 @@ class Plugin extends AppPlugin {
             tab.addEventListener('click', (e) => {
                 container.querySelectorAll('.pm-tab').forEach(t => t.classList.remove('active'));
                 container.querySelectorAll('.pm-tab-content').forEach(c => c.classList.remove('active'));
-                
+
                 e.target.classList.add('active');
                 container.querySelector(`#tab-${e.target.dataset.tab}`).classList.add('active');
             });
@@ -178,17 +184,31 @@ class Plugin extends AppPlugin {
             localStorage.setItem('pm_github_pat', pat);
             this.ui.addToaster({ title: "Settings Saved", dismissible: true, autoDestroyTime: 3000 });
         });
-        
-        
+
+
         container.querySelector('#pm-refresh-discover-btn').addEventListener('click', () => {
             this.loadDiscoverPlugins(container);
         });
 
-        
+        // Discover search
+        container.querySelector('#pm-discover-search').addEventListener('input', () => {
+            this._filterDiscoverList(container);
+        });
+
+        // Discover filter chips
+        container.querySelectorAll('.pm-filter-chip').forEach(chip => {
+            chip.addEventListener('click', (e) => {
+                container.querySelectorAll('.pm-filter-chip').forEach(c => c.classList.remove('active'));
+                e.target.classList.add('active');
+                this._filterDiscoverList(container);
+            });
+        });
+
+
         container.querySelector('#pm-import-theme-btn').addEventListener('click', () => {
             this.showThemeImportDialog();
         });
-        
+
         container.querySelector('#pm-export-theme-btn').addEventListener('click', () => {
             this.showThemeExportDialog();
         });
@@ -197,7 +217,7 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-install-global-btn').addEventListener('click', () => this.showInstallDialog(container, 'app'));
         container.querySelector('#pm-import-global-btn').addEventListener('click', () => this.showImportDialog(container, 'app'));
         container.querySelector('#pm-export-global-btn').addEventListener('click', () => this.showExportDialog('app'));
-        
+
         container.querySelector('#pm-install-col-btn').addEventListener('click', () => this.showInstallDialog(container, 'collection'));
         container.querySelector('#pm-import-col-btn').addEventListener('click', () => this.showImportDialog(container, 'collection'));
         container.querySelector('#pm-export-col-btn').addEventListener('click', () => this.showExportDialog('collection'));
@@ -207,7 +227,14 @@ class Plugin extends AppPlugin {
     async loadDiscoverPlugins(container) {
         const listContainer = container.querySelector('#pm-discover-list');
         listContainer.innerHTML = 'Fetching community plugins...';
-        
+
+        // Reset search and filters
+        const searchInput = container.querySelector('#pm-discover-search');
+        if (searchInput) searchInput.value = '';
+        container.querySelectorAll('.pm-filter-chip').forEach(c => c.classList.remove('active'));
+        const allChip = container.querySelector('.pm-filter-chip[data-filter="all"]');
+        if (allChip) allChip.classList.add('active');
+
         try {
             const repos = this.communityRepos.split('\n').map(u => u.trim()).filter(Boolean);
             if (repos.length === 0) {
@@ -216,13 +243,13 @@ class Plugin extends AppPlugin {
             }
 
             const items = [];
-            
+
             for (const repoUrl of repos) {
                 try {
                     const res = await fetch(repoUrl);
                     if (!res.ok) continue;
                     const text = await res.text();
-                    
+
                     const lines = text.split('\n');
                     let currentCategory = 'Other';
                     let foundPluginsSection = false;
@@ -233,124 +260,43 @@ class Plugin extends AppPlugin {
                             foundPluginsSection = true;
                         }
                         if (!foundPluginsSection) continue;
-                        
+
                         if (line.startsWith('## ') || line.startsWith('### ')) {
                             currentCategory = line.replace(/#/g, '').trim();
                         } else if (line.startsWith('- [')) {
                             const match = line.match(/- \[(.*?)\]\((.*?)\)(?: - (.*))?/);
                             if (match && match[2].startsWith('http')) {
+                                // Determine type from category
+                                const catLower = currentCategory.toLowerCase();
+                                let type = 'app';
+                                if (catLower.includes('collection')) type = 'collection';
+                                else if (catLower.includes('theme')) type = 'theme';
+
                                 items.push({
                                     name: match[1],
                                     url: match[2],
                                     description: match[3] || '',
                                     category: currentCategory,
+                                    type: type,
                                     sourceRepo: repoUrl
                                 });
                             }
                         }
                     }
-                } catch(e) {
+                } catch (e) {
                     console.error("Error fetching discover repo", repoUrl, e);
                 }
             }
-            
+
+            // Store items for filtering
+            this._discoverItems = items;
+
             if (items.length === 0) {
                 listContainer.innerHTML = '<div class="pm-card"><div class="pm-card-info"><p>No plugins found in the configured community repositories.</p></div></div>';
                 return;
             }
-            
-            listContainer.innerHTML = '';
-            
-            items.forEach(item => {
-                const isCollection = item.category.toLowerCase().includes('collection');
-                const isTheme = item.category.toLowerCase().includes('theme');
-                const badgeText = isTheme ? 'Theme' : (isCollection ? 'Collection' : 'App');
-                
-                const card = document.createElement('div');
-                card.className = 'pm-card';
-                card.innerHTML = `
-                    <div class="pm-card-info">
-                        <h3>
-                            ${item.name} 
-                            <span class="pm-badge">${badgeText}</span>
-                        </h3>
-                        <p>${item.description}</p>
-                        <p style="margin-top: 5px; font-size: 11px;"><a href="${item.url}" target="_blank">${item.url}</a></p>
-                    </div>
-                    <div class="pm-card-actions"></div>
-                `;
-                
-                const actionsContainer = card.querySelector('.pm-card-actions');
-                
-                
-                const previewBtn = document.createElement('button');
-                previewBtn.className = 'pm-btn';
-                previewBtn.innerText = 'Preview';
-                previewBtn.style.marginRight = '5px';
-                
-                previewBtn.addEventListener('click', () => {
-                    this.previewTheme(item.url);
-                });
-                
-                if (isTheme) {
-                    actionsContainer.appendChild(previewBtn);
-                }
 
-                const installBtn = document.createElement('button');
-                installBtn.className = 'pm-btn primary';
-                if (isTheme) {
-                    installBtn.innerText = 'Copy CSS';
-                } else {
-                    installBtn.innerText = 'Install';
-                }
-                actionsContainer.appendChild(installBtn);
-                
-                installBtn.addEventListener('click', async () => {
-                    const originalText = installBtn.innerText;
-                    installBtn.innerText = isTheme ? 'Fetching...' : 'Installing...';
-                    installBtn.disabled = true;
-                    
-                    try {
-                        if (isTheme) {
-                            const match = item.url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-                            if (!match) throw new Error("Invalid GitHub URL.");
-                            const owner = match[1];
-                            const repo = match[2].replace(/\.git$/, '');
-                            const headers = {};
-                            if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
-                            
-                            const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/`;
-                            const res = await fetch(apiUrl, { headers });
-                            if (!res.ok) throw new Error("Could not fetch repo contents.");
-                            
-                            const files = await res.json();
-                            const cssFile = files.find(f => f.name.endsWith('.css'));
-                            if (!cssFile) throw new Error("No .css file found in the root of this repository.");
-                            
-                            const cssRes = await fetch(cssFile.download_url, { headers });
-                            if (!cssRes.ok) throw new Error("Failed to download CSS file.");
-                            
-                            const cssText = await cssRes.text();
-                            await navigator.clipboard.writeText(cssText);
-                            this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
-                            installBtn.innerText = 'Copied';
-                        } else {
-                            const { json, js } = await this.fetchGithubRepo(item.url);
-                            await this.installPlugin(json, js);
-                            this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
-                            installBtn.innerText = 'Installed';
-                            this.loadPlugins(container);
-                        }
-                    } catch (err) {
-                        this.ui.addToaster({ title: "Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
-                        installBtn.innerText = originalText;
-                        installBtn.disabled = false;
-                    }
-                });
-
-                
-                listContainer.appendChild(card);
-            });
+            this._renderDiscoverCards(container, items);
 
         } catch (err) {
             console.error(err);
@@ -358,11 +304,122 @@ class Plugin extends AppPlugin {
         }
     }
 
+    _filterDiscoverList(container) {
+        if (!this._discoverItems) return;
+
+        const searchInput = container.querySelector('#pm-discover-search');
+        const activeChip = container.querySelector('.pm-filter-chip.active');
+        const searchTerm = (searchInput ? searchInput.value : '').toLowerCase().trim();
+        const filterType = activeChip ? activeChip.dataset.filter : 'all';
+
+        let filtered = this._discoverItems;
+
+        // Apply category filter
+        if (filterType !== 'all') {
+            filtered = filtered.filter(item => item.type === filterType);
+        }
+
+        // Apply search filter
+        if (searchTerm) {
+            filtered = filtered.filter(item => {
+                return item.name.toLowerCase().includes(searchTerm) ||
+                    item.description.toLowerCase().includes(searchTerm) ||
+                    item.category.toLowerCase().includes(searchTerm);
+            });
+        }
+
+        this._renderDiscoverCards(container, filtered);
+    }
+
+    _renderDiscoverCards(container, items) {
+        const listContainer = container.querySelector('#pm-discover-list');
+        listContainer.innerHTML = '';
+
+        if (items.length === 0) {
+            listContainer.innerHTML = '<div class="pm-card pm-empty-state"><div class="pm-card-info"><p>No matching plugins or themes found.</p></div></div>';
+            return;
+        }
+
+        items.forEach(item => {
+            const isCollection = item.type === 'collection';
+            const isTheme = item.type === 'theme';
+            const badgeText = isTheme ? 'Theme' : (isCollection ? 'Collection' : 'App');
+            const badgeClass = isTheme ? 'pm-badge-theme' : (isCollection ? 'pm-badge-collection' : 'pm-badge-app');
+
+            const card = document.createElement('div');
+            card.className = 'pm-card';
+            card.innerHTML = `
+                <div class="pm-card-info">
+                    <h3>
+                        ${item.name} 
+                        <span class="pm-badge ${badgeClass}">${badgeText}</span>
+                    </h3>
+                    <p>${item.description}</p>
+                    <p style="margin-top: 5px; font-size: 11px;"><a href="${item.url}" target="_blank">${item.url}</a></p>
+                </div>
+                <div class="pm-card-actions"></div>
+            `;
+
+            const actionsContainer = card.querySelector('.pm-card-actions');
+
+            const previewBtn = document.createElement('button');
+            previewBtn.className = 'pm-btn';
+            previewBtn.innerText = 'Preview';
+            previewBtn.style.marginRight = '5px';
+
+            previewBtn.addEventListener('click', () => {
+                this.previewTheme(item.url);
+            });
+
+            if (isTheme) {
+                actionsContainer.appendChild(previewBtn);
+            }
+
+            const installBtn = document.createElement('button');
+            installBtn.className = 'pm-btn primary';
+            if (isTheme) {
+                installBtn.innerText = 'Copy CSS';
+            } else {
+                installBtn.innerText = 'Install';
+            }
+            actionsContainer.appendChild(installBtn);
+
+            installBtn.addEventListener('click', async () => {
+                const originalText = installBtn.innerText;
+                installBtn.innerText = isTheme ? 'Fetching...' : 'Installing...';
+                installBtn.disabled = true;
+
+                try {
+                    if (isTheme) {
+                        // Use raw.githubusercontent.com directly to avoid CORS with api.github.com
+                        const cssText = await this._fetchThemeCSS(item.url);
+                        await navigator.clipboard.writeText(cssText);
+                        this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
+                        installBtn.innerText = 'Copied';
+                    } else {
+                        // Use the repo URL directly for installation
+                        const { json, js } = await this.fetchGithubRepo(item.url);
+                        await this.installPlugin(json, js);
+                        this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
+                        installBtn.innerText = 'Installed';
+                        this.loadPlugins(container);
+                    }
+                } catch (err) {
+                    this.ui.addToaster({ title: "Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
+                    installBtn.innerText = originalText;
+                    installBtn.disabled = false;
+                }
+            });
+
+            listContainer.appendChild(card);
+        });
+    }
+
     async loadPlugins(container) {
         try {
             const globals = await this.data.getAllGlobalPlugins();
             const collections = await this.data.getAllCollections();
-            
+
             this.renderPluginList(container, 'pm-global-list', globals);
             this.renderPluginList(container, 'pm-collections-list', collections);
         } catch (err) {
@@ -375,7 +432,7 @@ class Plugin extends AppPlugin {
     renderPluginList(panelContainer, containerId, plugins) {
         const container = panelContainer.querySelector(`#${containerId}`);
         container.innerHTML = '';
-        
+
         if (plugins.length === 0) {
             container.innerHTML = '<div class="pm-card"><div class="pm-card-info"><p>No items found.</p></div></div>';
             return;
@@ -392,10 +449,10 @@ class Plugin extends AppPlugin {
                 // Fallback
                 conf = { name: "Unknown", version: "Unknown" };
             }
-            
+
             const sourceRepo = conf.__source_repo || '';
             const isLocal = !sourceRepo;
-            
+
             const card = document.createElement('div');
             card.className = 'pm-card';
             card.innerHTML = `
@@ -410,7 +467,7 @@ class Plugin extends AppPlugin {
                 </div>
                 <div class="pm-card-actions"></div>
             `;
-            
+
             // Add native Type Badges
             const typeBadge = card.querySelector(`#pm-badge-type-${p.getGuid()}`);
             if (isLocal) {
@@ -420,9 +477,9 @@ class Plugin extends AppPlugin {
                 typeBadge.appendChild(this.ui.createIcon('cloud'));
                 typeBadge.appendChild(document.createTextNode(' GitHub'));
             }
-            
+
             const actionsContainer = card.querySelector('.pm-card-actions');
-            
+
             // Add Native Update Button
             let updateBtn = null;
             if (sourceRepo) {
@@ -431,17 +488,17 @@ class Plugin extends AppPlugin {
                 updateBtn.title = 'Check Update';
                 updateBtn.appendChild(this.ui.createIcon('refresh'));
                 actionsContainer.appendChild(updateBtn);
-                
+
                 updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
             }
-            
+
             // Add Native Delete Button
             const deleteBtn = document.createElement('button');
             deleteBtn.className = 'pm-btn danger pm-btn-delete';
             deleteBtn.title = 'Delete Plugin';
             deleteBtn.appendChild(this.ui.createIcon('x')); // 'x' or 'trash' might not exist, 'x' is close/delete in Thymer usually
             actionsContainer.appendChild(deleteBtn);
-            
+
             deleteBtn.addEventListener('click', async () => {
                 if (confirm(`Are you sure you want to delete ${conf.name}?`)) {
                     p.trashPlugin();
@@ -449,7 +506,7 @@ class Plugin extends AppPlugin {
                     this.loadPlugins(panelContainer);
                 }
             });
-            
+
             container.appendChild(card);
         });
     }
@@ -472,11 +529,11 @@ class Plugin extends AppPlugin {
                 </div>
             </div>
         `;
-        
+
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
-        
+
         document.getElementById('pm-theme-cancel').addEventListener('click', () => {
             document.body.removeChild(tempDiv);
         });
@@ -484,42 +541,21 @@ class Plugin extends AppPlugin {
         document.getElementById('pm-theme-fetch').addEventListener('click', async () => {
             const url = document.getElementById('pm-theme-repo-input').value.trim();
             if (!url) return;
-            
+
             const btn = document.getElementById('pm-theme-fetch');
             btn.innerText = "Fetching...";
             btn.disabled = true;
-            
+
             try {
-                const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-                if (!match) throw new Error("Invalid GitHub URL.");
-                
-                const owner = match[1];
-                const repo = match[2].replace(/\.git$/, '');
-                
-                const headers = {};
-                if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
-                
-                // Fetch repo contents to find CSS file
-                const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/`;
-                const res = await fetch(apiUrl, { headers });
-                if (!res.ok) throw new Error("Could not fetch repo contents.");
-                
-                const files = await res.json();
-                const cssFile = files.find(f => f.name.endsWith('.css'));
-                
-                if (!cssFile) throw new Error("No .css file found in the root of this repository.");
-                
-                const cssRes = await fetch(cssFile.download_url, { headers });
-                if (!cssRes.ok) throw new Error("Failed to download CSS file.");
-                
-                const cssText = await cssRes.text();
-                
+                // Use raw.githubusercontent.com directly to avoid CORS issues
+                const cssText = await this._fetchThemeCSS(url);
+
                 await navigator.clipboard.writeText(cssText);
-                
+
                 document.body.removeChild(tempDiv);
                 this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
-                
-            } catch(e) {
+
+            } catch (e) {
                 console.error(e);
                 this.ui.addToaster({ title: "Theme Fetch Failed", message: e.message, autoDestroyTime: 5000, dismissible: true });
                 btn.innerText = "Fetch CSS";
@@ -545,11 +581,11 @@ class Plugin extends AppPlugin {
                 </div>
             </div>
         `;
-        
+
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
-        
+
         document.getElementById('pm-theme-export-cancel').addEventListener('click', () => {
             document.body.removeChild(tempDiv);
         });
@@ -557,7 +593,7 @@ class Plugin extends AppPlugin {
         document.getElementById('pm-theme-export-download').addEventListener('click', () => {
             const css = document.getElementById('pm-theme-export-textarea').value.trim();
             if (!css) return;
-            
+
             const blob = new Blob([css], { type: 'text/css' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -567,7 +603,7 @@ class Plugin extends AppPlugin {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            
+
             document.body.removeChild(tempDiv);
         });
     }
@@ -575,19 +611,23 @@ class Plugin extends AppPlugin {
 
     async previewTheme(repoUrl) {
         try {
-            const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-            if (!match) return;
-            const owner = match[1];
-            const repo = match[2].replace(/\.git$/, '');
-            const headers = {};
-            if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
-            
-            const readmeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/readme`, { headers });
-            if (!readmeRes.ok) throw new Error("No README");
-            
-            const readmeData = await readmeRes.json();
-            const content = atob(readmeData.content);
-            
+            const { owner, repo } = this._parseGithubUrl(repoUrl);
+            if (!owner || !repo) return;
+
+            // Fetch README directly from raw.githubusercontent.com to avoid CORS
+            let content = '';
+            for (const branch of ['main', 'master']) {
+                try {
+                    const readmeRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/README.md`);
+                    if (readmeRes.ok) {
+                        content = await readmeRes.text();
+                        break;
+                    }
+                } catch (e) { /* try next branch */ }
+            }
+
+            if (!content) throw new Error("No README found");
+
             // Extract images from markdown
             const imgRegex = /!\[.*?\]\((.*?)\)|<img.*?src="(.*?)".*?>/g;
             const images = [];
@@ -598,12 +638,12 @@ class Plugin extends AppPlugin {
                     images.push(src);
                 }
             }
-            
+
             if (images.length === 0) {
                 this.ui.addToaster({ title: "No Previews", message: "No images found in the theme's README.", autoDestroyTime: 3000, dismissible: true });
                 return;
             }
-            
+
             const overlayHtml = `
                 <div id="pm-theme-preview-modal" class="pm-modal">
                     <div class="pm-modal-content" style="width: 800px; max-height: 90vh; overflow-y: auto;">
@@ -617,60 +657,100 @@ class Plugin extends AppPlugin {
                     </div>
                 </div>
             `;
-            
+
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = overlayHtml;
             document.body.appendChild(tempDiv);
-            
+
             document.getElementById('pm-close-preview').addEventListener('click', () => {
                 document.body.removeChild(tempDiv);
             });
-            
-        } catch(e) {
+
+        } catch (e) {
             this.ui.addToaster({ title: "Preview Failed", message: "Could not load theme preview images.", autoDestroyTime: 3000, dismissible: true });
         }
     }
 
+    /**
+     * Fetch theme CSS directly from raw.githubusercontent.com to avoid CORS issues
+     * with api.github.com. Tries common CSS filenames.
+     */
+    async _fetchThemeCSS(repoUrl) {
+        const { owner, repo, subpath } = this._parseGithubUrl(repoUrl);
+        if (!owner || !repo) throw new Error("Invalid GitHub URL.");
+
+        const basePath = subpath || '';
+        const cssFilenames = ['plugin.css', 'styles.css', 'theme.css', 'style.css'];
+
+        for (const branch of ['main', 'master']) {
+            for (const filename of cssFilenames) {
+                const prefix = basePath ? `${basePath}/` : '';
+                const url = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}${filename}`;
+                try {
+                    const res = await fetch(url);
+                    if (res.ok) return await res.text();
+                } catch (e) { /* try next */ }
+            }
+        }
+
+        throw new Error("No CSS file found. Tried: " + cssFilenames.join(', '));
+    }
+
     // --- GitHub Utils ---
-    
+
+    /**
+     * Parse a GitHub URL into owner, repo, and optional subpath.
+     * Supports:
+     *   https://github.com/user/repo
+     *   https://github.com/user/repo/tree/branch/path/to/subfolder
+     */
+    _parseGithubUrl(url) {
+        // Match URLs with optional /tree/branch/subpath
+        const match = url.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?(?:\/tree\/[^\/]+\/(.+?))?\/?$/);
+        if (!match) return { owner: null, repo: null, subpath: '' };
+        return {
+            owner: match[1],
+            repo: match[2],
+            subpath: match[3] || ''
+        };
+    }
+
     async fetchGithubRepo(url) {
-        // Normalize URL: https://github.com/user/repo
-        const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
-        if (!match) throw new Error("Invalid GitHub URL. Expected format: https://github.com/user/repo");
-        
-        const owner = match[1];
-        const repo = match[2].replace(/\.git$/, '');
-        
+        const { owner, repo, subpath } = this._parseGithubUrl(url);
+        if (!owner || !repo) throw new Error("Invalid GitHub URL. Expected format: https://github.com/user/repo");
+
         const headers = {};
         if (this.githubPat) {
             headers['Authorization'] = `token ${this.githubPat}`;
         }
 
+        const prefix = subpath ? `${subpath}/` : '';
+
         // Try to fetch plugin.json from main then master
         let branch = 'main';
-        let jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/plugin.json`;
-        let jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/plugin.js`;
-        
+        let jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.json`;
+        let jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
+
         let jsonRes = await fetch(jsonUrl, { headers });
         if (!jsonRes.ok) {
             branch = 'master';
-            jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/plugin.json`;
-            jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/plugin.js`;
+            jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.json`;
+            jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
             jsonRes = await fetch(jsonUrl, { headers });
         }
-        
-        if (!jsonRes.ok) throw new Error(`Could not find plugin.json on main or master branches in ${owner}/${repo}`);
-        
+
+        if (!jsonRes.ok) throw new Error(`Could not find plugin.json on main or master branches in ${owner}/${repo}${subpath ? '/' + subpath : ''}`);
+
         const pluginJson = await jsonRes.json();
-        
+
         const jsRes = await fetch(jsUrl, { headers });
-        if (!jsRes.ok) throw new Error(`Could not find plugin.js in ${owner}/${repo}`);
-        
+        if (!jsRes.ok) throw new Error(`Could not find plugin.js in ${owner}/${repo}${subpath ? '/' + subpath : ''}`);
+
         const pluginJs = await jsRes.text();
-        
-        // Add metadata
+
+        // Store the repo URL as source (use the original GitHub URL, not raw.githubusercontent.com)
         pluginJson.__source_repo = url;
-        
+
         return {
             json: pluginJson,
             js: pluginJs
@@ -686,23 +766,23 @@ class Plugin extends AppPlugin {
         try {
             this.ui.addToaster({ title: "Fetching plugin...", autoDestroyTime: 2000, dismissible: true });
             const { json, js } = await this.fetchGithubRepo(url);
-            
+
             // Validate type
             let pType = json.type;
             if (!pType) {
                 if (js.includes("extends AppPlugin")) pType = "app";
                 else if (js.includes("extends CollectionPlugin")) pType = "collection";
             }
-            
+
             const isGlobal = pType === 'app' || pType === 'global';
             const filterIsGlobal = typeFilter === 'app';
-            
+
             if (isGlobal !== filterIsGlobal) {
                 if (!confirm(`Warning: This repository appears to be a ${isGlobal ? 'Global Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Global Plugin' : 'Collection Plugin'}. Continue anyway?`)) {
                     return;
                 }
             }
-            
+
             await this.installPlugin(json, js);
             this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
             this.loadPlugins(container);
@@ -710,12 +790,12 @@ class Plugin extends AppPlugin {
             this.ui.addToaster({ title: "Install Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
         }
     }
-    
+
     async installPlugin(jsonConf, jsCode) {
         // Check for duplicates
         const allGlobals = await this.data.getAllGlobalPlugins();
         const allCollections = await this.data.getAllCollections();
-        
+
         const existingPlugin = [...allGlobals, ...allCollections].find(p => {
             try {
                 const conf = p.getExistingCodeAndConfig().json;
@@ -725,7 +805,7 @@ class Plugin extends AppPlugin {
                 return false;
             }
         });
-        
+
         let targetPlugin = null;
 
         if (existingPlugin) {
@@ -735,7 +815,7 @@ class Plugin extends AppPlugin {
                 throw new Error("Installation cancelled by user.");
             }
         }
-        
+
         if (!targetPlugin) {
             // Attempt to derive the type if it's missing in plugin.json
             let pType = jsonConf.type;
@@ -746,7 +826,7 @@ class Plugin extends AppPlugin {
                     pType = "collection";
                 }
             }
-            
+
             if (pType === 'app' || pType === 'global') {
                 targetPlugin = await this.data.createGlobalPlugin();
             } else if (pType === 'collection') {
@@ -754,10 +834,10 @@ class Plugin extends AppPlugin {
             } else {
                 throw new Error(`Unknown plugin type: ${pType || 'undefined'}. Ensure plugin.json has a "type" field or plugin.js extends AppPlugin/CollectionPlugin.`);
             }
-            
+
             if (!targetPlugin) throw new Error("Failed to create plugin container in workspace.");
         }
-        
+
         await targetPlugin.savePlugin(jsonConf, jsCode);
         return targetPlugin;
     }
@@ -782,11 +862,11 @@ class Plugin extends AppPlugin {
                 </div>
             </div>
         `;
-        
+
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
-        
+
         document.getElementById('pm-import-cancel').addEventListener('click', () => {
             document.body.removeChild(tempDiv);
         });
@@ -805,10 +885,10 @@ class Plugin extends AppPlugin {
         document.getElementById('pm-import-confirm').addEventListener('click', async () => {
             const val = document.getElementById('pm-import-textarea').value.trim();
             if (!val) return;
-            
+
             document.getElementById('pm-import-confirm').innerText = "Importing...";
             document.getElementById('pm-import-confirm').disabled = true;
-            
+
             let successCount = 0;
             let failCount = 0;
 
@@ -827,12 +907,12 @@ class Plugin extends AppPlugin {
                             }
                             await this.installPlugin(p.json, p.code);
                             successCount++;
-                        } catch(e) {
+                        } catch (e) {
                             console.error(e);
                             failCount++;
                         }
                     }
-                } catch(e) {
+                } catch (e) {
                     this.ui.addToaster({ title: "Import Failed", message: "Invalid JSON format", autoDestroyTime: 5000 });
                     document.body.removeChild(tempDiv);
                     return;
@@ -843,13 +923,13 @@ class Plugin extends AppPlugin {
                 for (const url of urls) {
                     try {
                         const { json, js } = await this.fetchGithubRepo(url);
-                        
+
                         let pType = json.type;
                         if (!pType) {
                             if (js.includes("extends AppPlugin")) pType = "app";
                             else if (js.includes("extends CollectionPlugin")) pType = "collection";
                         }
-                        
+
                         const isGlobal = pType === 'app' || pType === 'global';
                         const filterIsGlobal = typeFilter === 'app';
                         if (isGlobal !== filterIsGlobal) {
@@ -857,22 +937,22 @@ class Plugin extends AppPlugin {
                             failCount++;
                             continue;
                         }
-                        
+
                         await this.installPlugin(json, js);
                         successCount++;
-                    } catch(e) {
+                    } catch (e) {
                         console.error(e);
                         failCount++;
                     }
                 }
             }
-            
+
             document.body.removeChild(tempDiv);
-            this.ui.addToaster({ 
-                title: "Import Complete", 
+            this.ui.addToaster({
+                title: "Import Complete",
                 message: `Successfully installed ${successCount}. Failed: ${failCount}`,
-                dismissible: true, 
-                autoDestroyTime: 5000 
+                dismissible: true,
+                autoDestroyTime: 5000
             });
             this.loadPlugins(container);
         });
@@ -883,9 +963,9 @@ class Plugin extends AppPlugin {
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('loader'));
             btnEl.disabled = true;
-            
+
             const { json: remoteJson, js: remoteJs } = await this.fetchGithubRepo(sourceRepo);
-            
+
             if (remoteJson.version === currentConf.version) {
                 this.ui.addToaster({ title: "Up to date", message: `${currentConf.name} is already on the latest version.`, autoDestroyTime: 3000, dismissible: true });
                 btnEl.innerHTML = '';
@@ -897,19 +977,19 @@ class Plugin extends AppPlugin {
                 }, 3000);
                 return;
             }
-            
+
             // Update available!
             const badge = document.getElementById(`vbadge-${pluginObj.getGuid()}`);
-            if(badge) {
+            if (badge) {
                 badge.innerText = `Update Available (v${remoteJson.version})`;
                 badge.classList.add('update');
             }
-            
+
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('arrow-up'));
             btnEl.classList.add('update-btn');
             btnEl.disabled = false;
-            
+
             // Overwrite click handler to apply update
             btnEl.onclick = async () => {
                 // Local modifications warning check (simple length/hash comparison could go here in future)
@@ -919,7 +999,7 @@ class Plugin extends AppPlugin {
                     this.loadPlugins(container);
                 }
             };
-            
+
         } catch (err) {
             console.error(err);
             this.ui.addToaster({ title: "Update Check Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
@@ -932,7 +1012,7 @@ class Plugin extends AppPlugin {
     async showExportDialog(typeFilter) {
         const allGlobals = await this.data.getAllGlobalPlugins();
         const allCollections = await this.data.getAllCollections();
-        
+
         let targetPlugins = [];
         if (typeFilter === 'app') {
             targetPlugins = allGlobals;
@@ -941,7 +1021,7 @@ class Plugin extends AppPlugin {
         } else {
             targetPlugins = [...allGlobals, ...allCollections];
         }
-        
+
         const exportData = targetPlugins.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
@@ -953,19 +1033,19 @@ class Plugin extends AppPlugin {
                     code: code,
                     json: json
                 };
-            } catch(e) {
+            } catch (e) {
                 return null;
             }
         }).filter(Boolean);
-        
+
         // Simple list of URLs format
         const urls = exportData.map(d => d.source_repo).filter(Boolean).join('\n');
-        
+
         // Full Backup Format
         const fullBackup = JSON.stringify(exportData, null, 2);
-        
+
         const typeLabel = typeFilter === 'app' ? 'Global Plugins' : 'Collection Plugins';
-        
+
         const overlayHtml = `
             <div id="pm-export-modal" class="pm-modal">
                 <div class="pm-modal-content pm-export-content">
@@ -999,17 +1079,17 @@ class Plugin extends AppPlugin {
                 </div>
             </div>
         `;
-        
+
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
-        
+
         document.getElementById('pm-full-backup-text').value = fullBackup;
-        
+
         document.getElementById('pm-export-close').addEventListener('click', () => {
             document.body.removeChild(tempDiv);
         });
-        
+
         // Copy actions
         document.getElementById('pm-copy-urls').addEventListener('click', async (e) => {
             await navigator.clipboard.writeText(urls);
@@ -1017,14 +1097,14 @@ class Plugin extends AppPlugin {
             e.target.innerText = "Copied!";
             setTimeout(() => e.target.innerText = orig, 2000);
         });
-        
+
         document.getElementById('pm-copy-json').addEventListener('click', async (e) => {
             await navigator.clipboard.writeText(fullBackup);
             const orig = e.target.innerText;
             e.target.innerText = "Copied!";
             setTimeout(() => e.target.innerText = orig, 2000);
         });
-        
+
         // Download actions
         document.getElementById('pm-download-urls').addEventListener('click', () => {
             const blob = new Blob([urls], { type: 'text/plain' });
@@ -1037,7 +1117,7 @@ class Plugin extends AppPlugin {
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         });
-        
+
         document.getElementById('pm-download-json').addEventListener('click', () => {
             const blob = new Blob([fullBackup], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
