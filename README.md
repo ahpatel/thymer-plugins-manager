@@ -4,51 +4,86 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 
 ## Features
 
-- **Centralized Management**: View all your installed Global Plugins and Collection Plugins in a clean, tabbed interface.
-- **Easy Installation**: Install new plugins simply by pasting their GitHub repository URL. The manager automatically detects if it's an App Plugin or a Collection Plugin.
-- **Automated Updates**: Automatically checks for plugin updates in the background (daily) and displays a badge when a newer version is available on GitHub.
-- **One-Click Updates**: Seamlessly update any plugin to its latest GitHub version without losing your configuration.
-- **Bulk Import**: Import multiple plugins at once by pasting a list of GitHub URLs or uploading a JSON backup file. Automatically resolves duplicates and handles version merging.
-- **Export & Backup**: Export your installed plugins as a list of repository URLs, or download a full JSON backup containing all configuration and code to safely migrate your environment.
-- **GitHub PAT Support**: Provide an optional GitHub Personal Access Token to bypass unauthenticated API rate limits.
+### Plugin Management
+- **Centralized Dashboard**: View all installed Global Plugins and Collection Plugins in a clean, tabbed interface.
+- **One-Click Install**: Install plugins by pasting a GitHub repository URL. Supports standard repos, subdirectories, SDK examples, and non-standard file naming conventions.
+- **Smart File Discovery**: Automatically detects `plugin.json`, `plugin.js`, and CSS files — even when using custom filenames, extensionless Thymer exports, or nested folder structures.
+- **Automated Update Checks**: Background update checking (daily) with rate-limit-aware GitHub API polling. Displays a badge when newer versions are available.
+- **One-Click Updates**: Update any plugin to its latest GitHub version with pre-save validation to prevent incompatible code from crashing Thymer.
+- **Link Local Plugins**: Associate locally-installed plugins with a GitHub repo to enable update tracking.
+
+### Discover Tab
+- **Community Plugin Browser**: Discover plugins and themes from configurable community repository README files.
+- **Search & Filter**: Filter by name, description, or category. Filter chips for App Plugins, Collections, and Themes.
+- **Theme Preview**: Preview theme screenshots directly from the plugin's README.
+- **Copy Theme CSS**: Fetch theme CSS from GitHub and copy to clipboard for pasting into Thymer's Edit Theme CSS.
+- **Incompatible Plugin Handling**: Plugins that fail to install are automatically added to an exception list (persisted in localStorage with 30-day TTL). Greyed-out Install buttons with a manual "Recheck" option to test for newer, compatible versions.
+
+### Import & Export
+- **Bulk Import**: Import multiple plugins via a list of GitHub URLs or a JSON backup file. Per-plugin duplicate resolution — skipping one plugin doesn't cancel the rest.
+- **Full Backup Export**: Download a complete JSON backup containing all plugin configuration and code, or export a simple URL list.
+- **Auto-Export**: Optionally auto-save a backup JSON file to a local directory whenever plugins are installed, updated, or deleted. Uses the File System Access API with directory handle persistence via IndexedDB.
+- **Theme CSS Import/Export**: Fetch theme CSS from GitHub repos or export your current theme CSS as a downloadable file.
+
+### Security & Reliability
+- **XSS Prevention**: All user-controlled strings are HTML-escaped before DOM injection.
+- **JS Validation**: Pre-save validation catches ES module syntax and syntax errors before they can crash Thymer's runtime.
+- **Input Validation**: GitHub URL validation, HTTPS-only image rendering, and `rel="noopener noreferrer"` on all external links.
+- **Memory Leak Prevention**: Intervals cleared on unload, blob URLs revoked, and dangling modals cleaned up.
+- **Rate Limit Awareness**: Background update checker adds delays between requests and bails early on GitHub rate limits.
 
 ## Installation
 
 Since this plugin manages other plugins, it must be installed manually first.
 
 1. Create a new **App Plugin** in your Thymer workspace.
-2. Build the plugin using `npm run build` (or grab the pre-built `dist/plugin.js`).
-3. Paste the contents of `dist/plugin.js` into the **JavaScript** section of the Thymer plugin configuration.
+2. Paste the contents of `plugin.js` into the **Custom Code** section of the plugin.
+3. Paste the contents of `plugin.json` into the **Config** section.
 4. Paste the contents of `styles.css` into the **Custom CSS** section.
-5. Save the plugin. A new "Plugin Manager" option will appear in your Thymer sidebar.
+5. Save the plugin. A new **Plugin Manager** icon will appear in your sidebar.
+
+### Self-Update
+
+After initial manual install, link the Plugin Manager to its GitHub repo for future updates:
+
+1. Open Plugin Manager → **Global Plugins** tab.
+2. Click the 🔗 link icon on the Plugin Manager card.
+3. Enter: `https://github.com/ahpatel/thymer-plugins-manager`
+4. The update button (↻) will appear — click it to pull the latest version.
 
 ## Usage
 
-Once installed, click the **Plugin Manager** icon in your left sidebar to open the dashboard.
+Click the **Plugin Manager** icon in your left sidebar to open the dashboard.
 
 ### Tabs
 
-- **Global Plugins**: Manage workspace-level app plugins.
-- **Collections**: Manage collection-specific plugins.
-- **Settings**: Configure your GitHub Personal Access Token.
+| Tab | Purpose |
+|-----|---------|
+| **Global Plugins** | Manage workspace-level app plugins. Install, update, delete, import, export. |
+| **Collections** | Manage collection-specific plugins. Same actions as Global Plugins. |
+| **Themes** | Import theme CSS from GitHub or export your current theme CSS. |
+| **Discover** | Browse community plugins and themes. Search, filter, install, or preview. |
+| **Settings** | Configure GitHub PAT, community repo URLs, and auto-export preferences. |
 
-### Actions
+### Settings
 
-- **Install**: Paste a GitHub repository URL (e.g., `https://github.com/user/repo`). The manager will automatically fetch `plugin.json` and `plugin.js` from the `main` or `master` branch.
-- **Import**: Click to paste a list of URLs or click "Or upload a backup file" to select a JSON export file.
-- **Export**: Generates a downloadable `.txt` of URLs or a `.json` backup of your entire plugin environment.
-- **Update**: If a cloud icon appears with an "Update Available" badge, click the refresh arrow to pull the latest code.
-- **Delete**: Remove a plugin from your workspace permanently.
+- **GitHub PAT** (Optional): Provide a Personal Access Token to increase API rate limits when managing many plugins.
+- **Community Repositories**: List of raw Markdown URLs pointing to community plugin/theme directories.
+- **Auto-Export**: Toggle automatic backup on every plugin change. Choose a local directory using the browser's directory picker.
+
+## Browser Compatibility
+
+- **Chrome / Edge**: Full support including Auto-Export (File System Access API).
+- **Firefox / Safari**: All features except Auto-Export (File System Access API not available).
 
 ## Development
 
 To modify the Plugin Manager itself:
 
-1. Ensure you have the `thymer-plugin-sdk` installed locally.
-2. Run `npm install` to install dependencies.
-3. Use `npm run build` to bundle `plugin.js` via esbuild into the `dist/` directory.
-
 ```bash
 cd thymer-plugins-manager
+npm install
 npm run build
 ```
+
+This bundles `plugin.js` via esbuild into the `dist/` directory.

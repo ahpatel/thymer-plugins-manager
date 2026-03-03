@@ -12,6 +12,7 @@ class Plugin extends AppPlugin {
                 delete this._incompatiblePlugins[k];
         });
         localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
+        this._savedThemes = JSON.parse(localStorage.getItem('pm_saved_themes') || '[]');
         this._autoExportEnabled = localStorage.getItem('pm_auto_export') === 'true';
         this._autoExportDirHandle = null;
         this._autoExportDirName = localStorage.getItem('pm_auto_export_dir_name') || '';
@@ -154,14 +155,11 @@ class Plugin extends AppPlugin {
                 
                 <div class="pm-tab-content" id="tab-themes">
                     <div class="pm-tab-actions">
-                        <button class="pm-btn primary" id="pm-import-theme-btn">Import Theme CSS</button>
-                        <button class="pm-btn" id="pm-export-theme-btn">Export Theme CSS</button>
+                        <button class="pm-btn primary" id="pm-add-theme-github-btn">Add from GitHub</button>
+                        <button class="pm-btn" id="pm-add-theme-manual-btn">Add Manually</button>
+                        <button class="pm-btn" id="pm-export-all-themes-btn">Export All CSS</button>
                     </div>
-                    <div class="pm-card" style="height: auto;">
-                        <div class="pm-card-info">
-                            <p>Note: Thymer currently manages Global Theme CSS outside of the Plugin API. Use the Discover tab to find themes, or use the buttons above to fetch CSS from a GitHub repository to easily copy into your workspace's <strong>Edit Theme CSS</strong> menu.</p>
-                        </div>
-                    </div>
+                    <div id="pm-themes-list" class="pm-list-container"></div>
                 </div>
 
                 <div class="pm-tab-content" id="tab-settings">
@@ -183,7 +181,7 @@ class Plugin extends AppPlugin {
                                 <textarea id="pm-repos-input" class="pm-textarea" style="min-height: 80px;" placeholder="https://raw.githubusercontent.com/.../README.md">${this.communityRepos}</textarea>
                             </div>
 
-                            <div class="pm-input-group" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-default, #333);">
+                            <div class="pm-input-group" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--pm-border-default);">
                                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="checkbox" id="pm-auto-export-toggle" ${this._autoExportEnabled ? 'checked' : ''} />
                                     Auto-Export Backup on Changes
@@ -193,7 +191,7 @@ class Plugin extends AppPlugin {
                                 </p>
                                 <div style="display: flex; align-items: center; gap: 10px;">
                                     <button type="button" class="pm-btn" id="pm-auto-export-dir-btn">Choose Directory</button>
-                                    <span id="pm-auto-export-dir-label" style="font-size: 13px; color: var(--text-muted, #999);">${this._autoExportDirName ? '📁 ' + this._autoExportDirName : 'No directory selected'}</span>
+                                    <span id="pm-auto-export-dir-label" style="font-size: 13px; color: var(--pm-text-muted);">${this._autoExportDirName ? '📁 ' + this._autoExportDirName : 'No directory selected'}</span>
                                 </div>
                             </div>
 
@@ -291,13 +289,10 @@ class Plugin extends AppPlugin {
         });
 
 
-        container.querySelector('#pm-import-theme-btn').addEventListener('click', () => {
-            this.showThemeImportDialog();
-        });
-
-        container.querySelector('#pm-export-theme-btn').addEventListener('click', () => {
-            this.showThemeExportDialog();
-        });
+        container.querySelector('#pm-add-theme-github-btn').addEventListener('click', () => this._addThemeFromGithub(container));
+        container.querySelector('#pm-add-theme-manual-btn').addEventListener('click', () => this._addThemeManually(container));
+        container.querySelector('#pm-export-all-themes-btn').addEventListener('click', () => this._exportAllThemes());
+        this._renderThemesList(container);
 
         // Actions
         container.querySelector('#pm-install-global-btn').addEventListener('click', () => this.showInstallDialog(container, 'app'));
@@ -382,7 +377,7 @@ class Plugin extends AppPlugin {
                 return;
             }
 
-            this._renderDiscoverCards(container, items);
+            await this._renderDiscoverCards(container, items);
 
         } catch (err) {
             console.error(err);
@@ -390,7 +385,7 @@ class Plugin extends AppPlugin {
         }
     }
 
-    _filterDiscoverList(container) {
+    async _filterDiscoverList(container) {
         if (!this._discoverItems) return;
 
         const searchInput = container.querySelector('#pm-discover-search');
@@ -414,12 +409,26 @@ class Plugin extends AppPlugin {
             });
         }
 
-        this._renderDiscoverCards(container, filtered);
+        await this._renderDiscoverCards(container, filtered);
     }
 
-    _renderDiscoverCards(container, items) {
+    async _renderDiscoverCards(container, items) {
         const listContainer = container.querySelector('#pm-discover-list');
         listContainer.innerHTML = '';
+
+        // Build a set of installed plugin source URLs and names for quick lookup
+        const installedSet = new Set();
+        try {
+            const allGlobals = await this.data.getAllGlobalPlugins();
+            const allCollections = await this.data.getAllCollections();
+            [...allGlobals, ...allCollections].forEach(p => {
+                try {
+                    const conf = p.getExistingCodeAndConfig().json;
+                    if (conf.__source_repo) installedSet.add(conf.__source_repo);
+                    if (conf.name) installedSet.add(conf.name.toLowerCase());
+                } catch (e) { /* skip */ }
+            });
+        } catch (e) { /* couldn't read installed plugins, proceed without */ }
 
         if (items.length === 0) {
             listContainer.innerHTML = '<div class="pm-card pm-empty-state"><div class="pm-card-info"><p>No matching plugins or themes found.</p></div></div>';
@@ -463,6 +472,7 @@ class Plugin extends AppPlugin {
 
             // Check if plugin is on the incompatible list
             const isIncompatible = !!this._incompatiblePlugins[item.url];
+            const isInstalled = !isTheme && (installedSet.has(item.url) || installedSet.has(item.name.toLowerCase()));
 
             const installBtn = document.createElement('button');
             if (isIncompatible) {
@@ -473,6 +483,9 @@ class Plugin extends AppPlugin {
             } else if (isTheme) {
                 installBtn.className = 'pm-btn primary';
                 installBtn.innerText = 'Copy CSS';
+            } else if (isInstalled) {
+                installBtn.className = 'pm-btn';
+                installBtn.innerText = 'Reinstall';
             } else {
                 installBtn.className = 'pm-btn primary';
                 installBtn.innerText = 'Install';
@@ -679,71 +692,138 @@ class Plugin extends AppPlugin {
     }
 
 
-    async showThemeImportDialog() {
-        const overlayHtml = `
-            <div id="pm-theme-import-modal" class="pm-modal">
-                <div class="pm-modal-content">
-                    <h3>Import Theme CSS</h3>
-                    <p style="font-size: 13px; color: var(--text-muted, #999); margin-bottom: 15px;">
-                        Paste a GitHub repository URL for a theme. We will fetch its CSS and copy it to your clipboard so you can paste it into <strong>Edit Theme CSS</strong>.
-                    </p>
-                    <input type="text" id="pm-theme-repo-input" class="pm-input" placeholder="https://github.com/user/thymer-theme" />
-                    
-                    <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
-                        <button class="pm-btn" id="pm-theme-cancel">Cancel</button>
-                        <button class="pm-btn primary" id="pm-theme-fetch">Fetch CSS</button>
+    // --- Theme Library ---
+
+    _saveThemes() {
+        localStorage.setItem('pm_saved_themes', JSON.stringify(this._savedThemes));
+    }
+
+    _renderThemesList(container) {
+        const list = container.querySelector('#pm-themes-list');
+        if (!list) return;
+
+        if (this._savedThemes.length === 0) {
+            list.innerHTML = `
+                <div class="pm-card" style="height: auto;">
+                    <div class="pm-card-info">
+                        <p>No themes saved yet. Use <strong>Add from GitHub</strong> to fetch a theme CSS from a repository, or <strong>Add Manually</strong> to paste your own CSS.</p>
+                        <p style="margin-top: 8px; font-size: 12px; color: var(--pm-text-muted);">Once saved, use <strong>Export All CSS</strong> to copy the combined CSS into Thymer's <strong>Edit Theme CSS</strong> setting.</p>
                     </div>
+                </div>`;
+            return;
+        }
+
+        list.innerHTML = '';
+        this._savedThemes.forEach((theme, idx) => {
+            const card = document.createElement('div');
+            card.className = 'pm-card';
+            card.innerHTML = `
+                <div class="pm-card-info">
+                    <h3>${this._escHtml(theme.name)}
+                        <span class="pm-badge pm-version-badge">${theme.source ? 'GitHub' : 'Manual'}</span>
+                    </h3>
+                    <p style="font-size: 12px; color: var(--pm-text-muted);">
+                        ${theme.css.length} chars · Added ${new Date(theme.date).toLocaleDateString()}
+                        ${theme.source ? ` · <a href="${this._escHtml(theme.source)}" target="_blank" rel="noopener noreferrer">${this._escHtml(theme.source)}</a>` : ''}
+                    </p>
                 </div>
-            </div>
-        `;
+                <div class="pm-card-actions"></div>
+            `;
 
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = overlayHtml;
-        document.body.appendChild(tempDiv);
+            const actions = card.querySelector('.pm-card-actions');
 
-        document.getElementById('pm-theme-cancel').addEventListener('click', () => {
-            document.body.removeChild(tempDiv);
-        });
+            // Copy CSS button
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'pm-btn';
+            copyBtn.title = 'Copy this theme CSS to clipboard';
+            copyBtn.appendChild(this.ui.createIcon('copy'));
+            actions.appendChild(copyBtn);
+            copyBtn.addEventListener('click', async () => {
+                await navigator.clipboard.writeText(theme.css);
+                this.ui.addToaster({ title: 'Copied!', message: `${theme.name} CSS copied to clipboard.`, autoDestroyTime: 3000, dismissible: true });
+            });
 
-        document.getElementById('pm-theme-fetch').addEventListener('click', async () => {
-            const url = document.getElementById('pm-theme-repo-input').value.trim();
-            if (!url) return;
+            // Delete button
+            const delBtn = document.createElement('button');
+            delBtn.className = 'pm-btn danger pm-btn-delete';
+            delBtn.title = 'Remove theme';
+            delBtn.appendChild(this.ui.createIcon('x'));
+            actions.appendChild(delBtn);
+            delBtn.addEventListener('click', () => {
+                if (confirm(`Remove theme "${theme.name}"?`)) {
+                    this._savedThemes.splice(idx, 1);
+                    this._saveThemes();
+                    this._autoExport();
+                    this._renderThemesList(container);
+                }
+            });
 
-            const btn = document.getElementById('pm-theme-fetch');
-            btn.innerText = "Fetching...";
-            btn.disabled = true;
-
-            try {
-                // Use raw.githubusercontent.com directly to avoid CORS issues
-                const cssText = await this._fetchThemeCSS(url);
-
-                await navigator.clipboard.writeText(cssText);
-
-                document.body.removeChild(tempDiv);
-                this.ui.addToaster({ title: "CSS Copied!", message: "Theme CSS copied to clipboard. Press Ctrl+P -> Edit Theme CSS -> Paste.", autoDestroyTime: 5000, dismissible: true });
-
-            } catch (e) {
-                console.error(e);
-                this.ui.addToaster({ title: "Theme Fetch Failed", message: e.message, autoDestroyTime: 5000, dismissible: true });
-                btn.innerText = "Fetch CSS";
-                btn.disabled = false;
-            }
+            list.appendChild(card);
         });
     }
 
-    showThemeExportDialog() {
+    async _addThemeFromGithub(container) {
+        const url = prompt('Enter the GitHub repo URL for the theme:');
+        if (!url) return;
+
+        this.ui.addToaster({ title: 'Fetching theme CSS...', autoDestroyTime: 2000, dismissible: true });
+
+        try {
+            const cssText = await this._fetchThemeCSS(url);
+            const { owner, repo } = this._parseGithubUrl(url);
+            const name = prompt('Name this theme:', repo || 'My Theme');
+            if (!name) return;
+
+            this._savedThemes.push({
+                id: Date.now().toString(36),
+                name,
+                css: cssText,
+                source: url,
+                date: new Date().toISOString()
+            });
+            this._saveThemes();
+            this._autoExport();
+            this._renderThemesList(container);
+            this.ui.addToaster({ title: 'Theme Saved', message: `"${name}" added to your theme library.`, autoDestroyTime: 3000, dismissible: true });
+        } catch (fetchErr) {
+            // CSS not auto-detected → fall back to manual paste modal
+            this._showManualThemePasteDialog(container, url, fetchErr.message);
+        }
+    }
+
+    _addThemeManually(container) {
+        this._showManualThemePasteDialog(container, null, null);
+    }
+
+    _showManualThemePasteDialog(container, sourceUrl, errorMsg) {
+        let defaultName = 'My Theme';
+        let repoLinkHtml = '';
+        if (sourceUrl) {
+            try {
+                const { repo } = this._parseGithubUrl(sourceUrl);
+                if (repo) defaultName = repo;
+                repoLinkHtml = `<p style="font-size: 13px; margin-bottom: 10px;">
+                                    <a href="${this._escHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">
+                                        Open repository in new tab to find the CSS
+                                    </a>
+                                </p>`;
+            } catch (e) { /* ignore parse error */ }
+        }
+
         const overlayHtml = `
-            <div id="pm-theme-export-modal" class="pm-modal">
+            <div class="pm-modal">
                 <div class="pm-modal-content">
-                    <h3>Export Theme CSS</h3>
-                    <p style="font-size: 13px; color: var(--text-muted, #999); margin-bottom: 15px;">
-                        Because the SDK cannot read your global Custom Theme CSS directly, you must paste it here to download it as a backup file.
-                    </p>
-                    <textarea id="pm-theme-export-textarea" class="pm-textarea" placeholder="Paste your CSS here..."></textarea>
-                    
+                    <h3>${sourceUrl ? 'CSS Not Auto-Detected' : 'Add Theme Manually'}</h3>
+                    ${errorMsg ? `<p style="font-size: 13px; color: var(--pm-text-muted); margin-bottom: 5px;">Could not auto-detect CSS: ${this._escHtml(errorMsg)}<br>Paste the theme CSS below instead.</p>` : ''}
+                    ${repoLinkHtml}
+                    <div class="pm-input-group" style="margin-bottom: 10px;">
+                        <label>Theme Name</label>
+                        <input type="text" id="pm-manual-theme-name" class="pm-input" value="${this._escHtml(defaultName)}" placeholder="My Theme" />
+                    </div>
+                    <textarea id="pm-manual-theme-css" class="pm-textarea" placeholder="Paste your theme CSS here..."></textarea>
                     <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
-                        <button class="pm-btn" id="pm-theme-export-cancel">Cancel</button>
-                        <button class="pm-btn primary" id="pm-theme-export-download">Download .css</button>
+                        <button class="pm-btn" id="pm-manual-theme-cancel">Cancel</button>
+                        <button class="pm-btn primary" id="pm-manual-theme-save">Save Theme</button>
                     </div>
                 </div>
             </div>
@@ -753,25 +833,75 @@ class Plugin extends AppPlugin {
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
 
-        document.getElementById('pm-theme-export-cancel').addEventListener('click', () => {
+        tempDiv.querySelector('#pm-manual-theme-cancel').addEventListener('click', () => document.body.removeChild(tempDiv));
+        tempDiv.querySelector('#pm-manual-theme-save').addEventListener('click', () => {
+            const name = tempDiv.querySelector('#pm-manual-theme-name').value.trim();
+            const css = tempDiv.querySelector('#pm-manual-theme-css').value.trim();
+            if (!name || !css) {
+                this.ui.addToaster({ title: 'Missing Fields', message: 'Please provide both a name and CSS.', autoDestroyTime: 3000, dismissible: true });
+                return;
+            }
+            this._savedThemes.push({
+                id: Date.now().toString(36),
+                name,
+                css,
+                source: sourceUrl || '',
+                date: new Date().toISOString()
+            });
+            this._saveThemes();
+            this._autoExport();
             document.body.removeChild(tempDiv);
+            this._renderThemesList(container);
+            this.ui.addToaster({ title: 'Theme Saved', message: `"${name}" added to your theme library.`, autoDestroyTime: 3000, dismissible: true });
+        });
+    }
+
+    async _exportAllThemes() {
+        if (this._savedThemes.length === 0) {
+            this.ui.addToaster({ title: 'No Themes', message: 'No themes saved to export.', autoDestroyTime: 3000, dismissible: true });
+            return;
+        }
+        const combined = this._savedThemes.map(t => `/* === ${t.name} === */\n${t.css}`).join('\n\n');
+
+        const overlayHtml = `
+            <div class="pm-modal">
+                <div class="pm-modal-content pm-export-content">
+                    <h3>Export All Themes</h3>
+                    <p style="font-size: 13px; color: var(--pm-text-muted); margin-bottom: 10px;">Copy this combined CSS and paste it into Thymer's <strong>Edit Theme CSS</strong> setting.</p>
+                    <textarea class="pm-textarea pm-textarea-json" id="pm-all-themes-css" readonly></textarea>
+                    <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
+                        <button class="pm-btn" id="pm-themes-export-copy">Copy to Clipboard</button>
+                        <button class="pm-btn" id="pm-themes-export-download">Download .css</button>
+                        <button class="pm-btn primary" id="pm-themes-export-close">Close</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = overlayHtml;
+        document.body.appendChild(tempDiv);
+        tempDiv.querySelector('#pm-all-themes-css').value = combined;
+
+        tempDiv.querySelector('#pm-themes-export-close').addEventListener('click', () => document.body.removeChild(tempDiv));
+
+        tempDiv.querySelector('#pm-themes-export-copy').addEventListener('click', async (e) => {
+            await navigator.clipboard.writeText(combined);
+            const orig = e.target.innerText;
+            e.target.innerText = 'Copied!';
+            setTimeout(() => e.target.innerText = orig, 2000);
         });
 
-        document.getElementById('pm-theme-export-download').addEventListener('click', () => {
-            const css = document.getElementById('pm-theme-export-textarea').value.trim();
-            if (!css) return;
-
-            const blob = new Blob([css], { type: 'text/css' });
-            const url = URL.createObjectURL(blob);
+        tempDiv.querySelector('#pm-themes-export-download').addEventListener('click', () => {
+            const blob = new Blob([combined], { type: 'text/css' });
+            const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
-            a.download = `thymer-theme-backup.css`;
+            a.href = blobUrl;
+            a.download = 'thymer-themes-combined.css';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-
-            document.body.removeChild(tempDiv);
+            URL.revokeObjectURL(blobUrl);
         });
     }
 
@@ -816,7 +946,7 @@ class Plugin extends AppPlugin {
                     <div class="pm-modal-content" style="width: 800px; max-height: 90vh; overflow-y: auto;">
                         <h3>Theme Preview</h3>
                         <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px;">
-                            ${images.filter(img => img.startsWith('https://')).map(img => `<img src="${this._escHtml(img)}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--border-default, #333);" />`).join('')}
+                            ${images.filter(img => img.startsWith('https://')).map(img => `<img src="${this._escHtml(img)}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--pm-border-default);" />`).join('')}
                         </div>
                         <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
                             <button class="pm-btn primary" id="pm-close-preview">Close</button>
@@ -862,14 +992,21 @@ class Plugin extends AppPlugin {
         // Strategy 2: Use GitHub API to list directory and find CSS-like files
         try {
             const files = await this._listRepoDirectory(owner, repo, subpath);
+            // First try the smart role-based finder
             const cssFile = this._findFileByRole(files, 'css');
             if (cssFile) {
                 const res = await fetch(cssFile.download_url);
                 if (res.ok) return await res.text();
             }
+            // Fallback: if there's exactly one .css file in the repo, use it regardless of name
+            const allCssFiles = files.filter(f => f.name && f.name.endsWith('.css'));
+            if (allCssFiles.length === 1 && allCssFiles[0].download_url) {
+                const res = await fetch(allCssFiles[0].download_url);
+                if (res.ok) return await res.text();
+            }
         } catch (e) { /* fall through */ }
 
-        throw new Error("No CSS file found in this repository.");
+        throw new Error("No CSS file found in this repository. You can paste the CSS manually instead.");
     }
 
     // --- Auto-Export ---
@@ -1284,8 +1421,8 @@ class Plugin extends AppPlugin {
                     <p>Paste GitHub URLs (one per line), paste a JSON export array, or upload a JSON backup file.</p>
                     <textarea id="pm-import-textarea" class="pm-textarea" placeholder="https://github.com/user/repo1\nhttps://github.com/user/repo2"></textarea>
                     
-                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-default, #333);">
-                        <label style="display: block; font-size: 13px; margin-bottom: 5px; color: var(--text-muted, #999);">Or upload a backup file:</label>
+                    <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--pm-border-default);">
+                        <label style="display: block; font-size: 13px; margin-bottom: 5px; color: var(--pm-text-muted);">Or upload a backup file:</label>
                         <input type="file" id="pm-import-file" accept=".json" style="font-size: 13px; color: inherit; width: 100%;" />
                     </div>
 
