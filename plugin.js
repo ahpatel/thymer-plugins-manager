@@ -5,6 +5,13 @@ class Plugin extends AppPlugin {
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
         this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}');
+        // Evict stale incompatible entries older than 30 days
+        const _cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        Object.keys(this._incompatiblePlugins).forEach(k => {
+            if (new Date(this._incompatiblePlugins[k].date || 0).getTime() < _cutoff)
+                delete this._incompatiblePlugins[k];
+        });
+        localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
         this._autoExportEnabled = localStorage.getItem('pm_auto_export') === 'true';
         this._autoExportDirHandle = null;
         this._autoExportDirName = localStorage.getItem('pm_auto_export_dir_name') || '';
@@ -40,6 +47,11 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
+        // Remove any dangling import modal from the DOM
+        if (this._importModal && this._importModal.parentNode) {
+            this._importModal.parentNode.removeChild(this._importModal);
+            this._importModal = null;
+        }
     }
 
     async startAutomatedUpdateChecker() {
@@ -72,7 +84,16 @@ class Plugin extends AppPlugin {
                             updatesAvailable[p.getGuid()] = remoteJson.version;
                         }
                     }
-                } catch (e) { /* ignore individual plugin errors in background */ }
+                } catch (e) {
+                    // Bail early if rate-limited
+                    if (e.message && (e.message.includes('rate limit') || e.message.includes('403'))) {
+                        console.warn('[Plugin Manager] GitHub rate limit hit during background check, stopping early.');
+                        break;
+                    }
+                    /* ignore individual plugin errors */
+                }
+                // Avoid GitHub rate limiting between requests
+                await new Promise(r => setTimeout(r, 750));
             }
 
             localStorage.setItem('pm_updates_available', JSON.stringify(updatesAvailable));
@@ -188,7 +209,7 @@ class Plugin extends AppPlugin {
             element.innerHTML = html;
             this.bindEvents(element);
             this.loadPlugins(element);
-            this.loadDiscoverPlugins(element);
+            // Discover tab is loaded lazily on first click (see bindEvents)
         }
     }
 
@@ -201,6 +222,11 @@ class Plugin extends AppPlugin {
 
                 e.target.classList.add('active');
                 container.querySelector(`#tab-${e.target.dataset.tab}`).classList.add('active');
+
+                // Lazy-load Discover tab on first click
+                if (e.target.dataset.tab === 'discover' && !this._discoverItems) {
+                    this.loadDiscoverPlugins(container);
+                }
             });
         });
 
@@ -507,8 +533,8 @@ class Plugin extends AppPlugin {
                         this._incompatiblePlugins[item.url] = { name: item.name, error: err.message, date: new Date().toISOString() };
                         localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
                         this.ui.addToaster({ title: "Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
-                        // Re-render to show the greyed-out state
-                        this._renderDiscoverCards(container, items);
+                        // Re-render respecting current filter/search state
+                        this._filterDiscoverList(container);
                     }
                 });
             }
@@ -603,7 +629,8 @@ class Plugin extends AppPlugin {
 
             deleteBtn.addEventListener('click', async () => {
                 if (confirm(`Are you sure you want to delete ${conf.name}?`)) {
-                    p.trashPlugin();
+                    await p.trashPlugin();
+                    this._autoExport(); // fire-and-forget
                     this.ui.addToaster({ title: "Plugin deleted", dismissible: true, autoDestroyTime: 3000 });
                     this.loadPlugins(panelContainer);
                 }
@@ -751,7 +778,7 @@ class Plugin extends AppPlugin {
                     <div class="pm-modal-content" style="width: 800px; max-height: 90vh; overflow-y: auto;">
                         <h3>Theme Preview</h3>
                         <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px;">
-                            ${images.map(img => `<img src="${this._escHtml(img)}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--border-default, #333);" />`).join('')}
+                            ${images.filter(img => img.startsWith('https://')).map(img => `<img src="${this._escHtml(img)}" style="max-width: 100%; border-radius: 4px; border: 1px solid var(--border-default, #333);" />`).join('')}
                         </div>
                         <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
                             <button class="pm-btn primary" id="pm-close-preview">Close</button>
@@ -845,6 +872,7 @@ class Plugin extends AppPlugin {
             console.log(`[Plugin Manager] Auto-exported backup to ${this._autoExportDirName}/${filename}`);
         } catch (e) {
             console.error('[Plugin Manager] Auto-export failed:', e);
+            this.ui.addToaster({ title: "Auto-Backup Failed", message: e.message, autoDestroyTime: 6000, dismissible: true });
         }
     }
 
@@ -887,11 +915,24 @@ class Plugin extends AppPlugin {
 
     // --- Utilities ---
 
+    /** Validate JS code is compatible with Thymer's runtime before saving */
+    _validatePluginJS(name, jsCode) {
+        if (!jsCode) return;
+        if (/^\s*import\s+/m.test(jsCode) || /^\s*export\s+/m.test(jsCode)) {
+            throw new Error(`"${name || 'Unknown'}" uses ES module syntax (import/export) which is not compatible with Thymer's plugin system.`);
+        }
+        try { new Function(jsCode); }
+        catch (e) { throw new Error(`"${name || 'Unknown'}" has a code error: ${e.message}`); }
+    }
+
     /** Escape HTML entities to prevent XSS when injecting user-controlled strings into innerHTML */
     _escHtml(str) {
-        const div = document.createElement('div');
-        div.appendChild(document.createTextNode(str));
-        return div.innerHTML;
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     /** Validate that a URL points to github.com */
@@ -917,6 +958,8 @@ class Plugin extends AppPlugin {
      *   https://github.com/user/repo/issues, /pulls, /wiki, etc.
      */
     _parseGithubUrl(url) {
+        // Normalize SSH URLs: git@github.com:user/repo.git → https://github.com/user/repo
+        url = url.replace(/^git@github\.com:/, 'https://github.com/').replace(/\.git$/, '');
         // First, strip known GitHub page paths that don't point to code
         const githubPages = /\/(releases|issues|pulls|wiki|actions|settings|discussions|tags|commit|compare|security|projects|milestones|labels|pulse|graphs|network|community)(\/.*)?$/;
         const cleanUrl = url.replace(githubPages, '');
@@ -1125,7 +1168,7 @@ class Plugin extends AppPlugin {
         }
     }
 
-    async installPlugin(jsonConf, jsCode) {
+    async installPlugin(jsonConf, jsCode, { interactive = true } = {}) {
         // Skip the Plugin Manager itself — it doesn't need to be reinstalled
         const name = (jsonConf.name || '').toLowerCase();
         if (name === 'plugin manager' || name === 'plugins manager') {
@@ -1149,10 +1192,9 @@ class Plugin extends AppPlugin {
         let targetPlugin = null;
 
         if (existingPlugin) {
-            if (confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
+            if (!interactive || confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
                 targetPlugin = existingPlugin;
             } else {
-                // Don't throw — return 'skipped' so batch imports can continue
                 return 'skipped';
             }
         }
@@ -1171,8 +1213,12 @@ class Plugin extends AppPlugin {
 
             // If still unknown, ask the user
             if (!pType || (pType !== 'app' && pType !== 'global' && pType !== 'collection')) {
-                const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Global Plugin, or Cancel for Collection Plugin.`);
-                pType = choice ? 'app' : 'collection';
+                if (!interactive) {
+                    pType = 'app'; // Default in non-interactive contexts
+                } else {
+                    const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Global Plugin, or Cancel for Collection Plugin.`);
+                    pType = choice ? 'app' : 'collection';
+                }
             }
 
             if (pType === 'app' || pType === 'global') {
@@ -1185,18 +1231,7 @@ class Plugin extends AppPlugin {
         }
 
         // Validate JS before saving — catch issues that would crash Thymer's runtime
-        if (jsCode) {
-            // Check for ES module syntax (import/export) which Thymer can't run via new Function()
-            if (/^\s*import\s+/m.test(jsCode) || /^\s*export\s+/m.test(jsCode)) {
-                throw new Error(`"${jsonConf.name || 'Unknown'}" uses ES module syntax (import/export) which is not compatible with Thymer's plugin system.`);
-            }
-            // Try to compile the JS to catch syntax errors before saving
-            try {
-                new Function(jsCode);
-            } catch (syntaxErr) {
-                throw new Error(`"${jsonConf.name || 'Unknown'}" has a code error: ${syntaxErr.message}`);
-            }
-        }
+        this._validatePluginJS(jsonConf.name, jsCode);
 
         await targetPlugin.savePlugin(jsonConf, jsCode);
         this._autoExport();  // fire-and-forget
@@ -1227,9 +1262,11 @@ class Plugin extends AppPlugin {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
+        this._importModal = tempDiv; // Track for cleanup in onUnload
 
         document.getElementById('pm-import-cancel').addEventListener('click', () => {
             document.body.removeChild(tempDiv);
+            this._importModal = null;
         });
 
         // Handle file upload immediately dumping text into the textarea for preview/processing
@@ -1293,6 +1330,7 @@ class Plugin extends AppPlugin {
             }
 
             document.body.removeChild(tempDiv);
+            this._importModal = null;
             const parts = [`Installed: ${successCount}`];
             if (skippedNames.length > 0) parts.push(`Skipped: ${skippedNames.join(', ')}`);
             if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
@@ -1342,6 +1380,7 @@ class Plugin extends AppPlugin {
             btnEl.onclick = async () => {
                 // Local modifications warning check (simple length/hash comparison could go here in future)
                 if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
+                    this._validatePluginJS(remoteJson.name, remoteJs);
                     await pluginObj.savePlugin(remoteJson, remoteJs);
                     this._autoExport();  // fire-and-forget
                     this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
@@ -1359,33 +1398,15 @@ class Plugin extends AppPlugin {
     }
 
     async showExportDialog(typeFilter) {
-        const allGlobals = await this.data.getAllGlobalPlugins();
-        const allCollections = await this.data.getAllCollections();
-
-        let targetPlugins = [];
+        const allData = await this._getExportData();
+        let exportData;
         if (typeFilter === 'app') {
-            targetPlugins = allGlobals;
+            exportData = allData.filter(d => d.type !== 'collection');
         } else if (typeFilter === 'collection') {
-            targetPlugins = allCollections;
+            exportData = allData.filter(d => d.type === 'collection');
         } else {
-            targetPlugins = [...allGlobals, ...allCollections];
+            exportData = allData;
         }
-
-        const exportData = targetPlugins.map(p => {
-            try {
-                const { json, code } = p.getExistingCodeAndConfig();
-                return {
-                    name: json.name,
-                    type: json.type,
-                    version: json.version,
-                    source_repo: json.__source_repo,
-                    code: code,
-                    json: json
-                };
-            } catch (e) {
-                return null;
-            }
-        }).filter(Boolean);
 
         // Simple list of URLs format
         const urls = exportData.map(d => d.source_repo).filter(Boolean).join('\n');
