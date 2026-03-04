@@ -1453,8 +1453,8 @@ class Plugin extends AppPlugin {
             // Validate type
             let pType = json.type;
             if (!pType) {
-                if (js.includes("extends AppPlugin")) pType = "app";
-                else if (js.includes("extends CollectionPlugin")) pType = "collection";
+                if (/extends\s+AppPlugin/.test(js)) pType = "app";
+                else if (/extends\s+(CollectionPlugin|JournalCorePlugin)/.test(js)) pType = "collection";
             }
 
             const isGlobal = pType === 'app' || pType === 'global';
@@ -1512,7 +1512,7 @@ class Plugin extends AppPlugin {
                 // Check for class extension patterns (handles various whitespace/formatting)
                 if (/extends\s+AppPlugin/.test(jsCode)) {
                     pType = "app";
-                } else if (/extends\s+CollectionPlugin/.test(jsCode)) {
+                } else if (/extends\s+(CollectionPlugin|JournalCorePlugin)/.test(jsCode)) {
                     pType = "collection";
                 }
             }
