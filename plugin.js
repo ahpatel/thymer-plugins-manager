@@ -780,6 +780,16 @@ class Plugin extends AppPlugin {
                 this.ui.addToaster({ title: 'Copied!', message: `${theme.name} CSS copied to clipboard.`, autoDestroyTime: 3000, dismissible: true });
             });
 
+            // Edit button
+            const editBtn = document.createElement('button');
+            editBtn.className = 'pm-btn';
+            editBtn.title = 'Edit theme';
+            editBtn.appendChild(this.ui.createIcon('edit'));
+            actions.appendChild(editBtn);
+            editBtn.addEventListener('click', () => {
+                this._showEditThemeDialog(container, idx);
+            });
+
             // Delete button
             const delBtn = document.createElement('button');
             delBtn.className = 'pm-btn danger pm-btn-delete';
@@ -890,6 +900,64 @@ class Plugin extends AppPlugin {
             document.body.removeChild(tempDiv);
             this._renderThemesList(container);
             this.ui.addToaster({ title: 'Theme Saved', message: `"${name}" added to your theme library.`, autoDestroyTime: 3000, dismissible: true });
+        });
+    }
+
+    _showEditThemeDialog(container, idx) {
+        const theme = this._savedThemes[idx];
+        if (!theme) return;
+
+        const sourceUrl = theme.source || '';
+        let repoLinkHtml = '';
+        if (sourceUrl) {
+            repoLinkHtml = `<p style="font-size: 13px; margin-bottom: 10px;">
+                                <a href="${this._escHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">
+                                    Open repository in new tab
+                                </a>
+                            </p>`;
+        }
+
+        const overlayHtml = `
+            <div class="pm-modal">
+                <div class="pm-modal-content">
+                    <h3>Edit Theme</h3>
+                    ${repoLinkHtml}
+                    <div class="pm-input-group" style="margin-bottom: 10px;">
+                        <label>Theme Name</label>
+                        <input type="text" id="pm-edit-theme-name" class="pm-input" value="${this._escHtml(theme.name)}" placeholder="My Theme" />
+                    </div>
+                    <textarea id="pm-edit-theme-css" class="pm-textarea" placeholder="Paste your theme CSS here...">${this._escHtml(theme.css)}</textarea>
+                    <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
+                        <button class="pm-btn" id="pm-edit-theme-cancel">Cancel</button>
+                        <button class="pm-btn primary" id="pm-edit-theme-save">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = overlayHtml;
+        document.body.appendChild(tempDiv);
+
+        tempDiv.querySelector('#pm-edit-theme-cancel').addEventListener('click', () => document.body.removeChild(tempDiv));
+        tempDiv.querySelector('#pm-edit-theme-save').addEventListener('click', () => {
+            const name = tempDiv.querySelector('#pm-edit-theme-name').value.trim();
+            const css = tempDiv.querySelector('#pm-edit-theme-css').value.trim();
+            if (!name || !css) {
+                this.ui.addToaster({ title: 'Missing Fields', message: 'Please provide both a name and CSS.', autoDestroyTime: 3000, dismissible: true });
+                return;
+            }
+            this._savedThemes[idx] = {
+                ...this._savedThemes[idx],
+                name,
+                css,
+                date: new Date().toISOString()
+            };
+            this._saveThemes();
+            this._autoExport();
+            document.body.removeChild(tempDiv);
+            this._renderThemesList(container);
+            this.ui.addToaster({ title: 'Theme Updated', message: `"${name}" has been updated.`, autoDestroyTime: 3000, dismissible: true });
         });
     }
 
