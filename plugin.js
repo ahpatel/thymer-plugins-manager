@@ -637,7 +637,7 @@ class Plugin extends AppPlugin {
                     <h3 id="pm-title-${p.getGuid()}">
                         ${this._escHtml(conf.name || 'Unnamed Plugin')} 
                         <span class="pm-badge" id="pm-badge-type-${p.getGuid()}"></span>
-                        <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || '0.0.0')}</span>
+                        <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
                     </h3>
                     <p>${this._escHtml(conf.description || 'No description')}</p>
                     ${sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(sourceRepo)}" target="_blank" rel="noopener noreferrer">${this._escHtml(sourceRepo)}</a></p>` : ''}
