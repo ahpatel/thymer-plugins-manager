@@ -38,24 +38,6 @@ class Plugin extends AppPlugin {
 
         // Start automated update checker
         this.startAutomatedUpdateChecker();
-
-        // Auto-link this plugin to its GitHub repo so it can self-update.
-        // If the user has already set a custom __source_repo, respect it.
-        this._ensureSelfLinked();
-    }
-
-    async _ensureSelfLinked() {
-        const DEFAULT_REPO = 'https://github.com/ahpatel/thymer-plugins-manager';
-        try {
-            const { json, code } = this.getExistingCodeAndConfig();
-            if (!json.__source_repo) {
-                json.__source_repo = DEFAULT_REPO;
-                await this.savePlugin(json, code);
-            }
-        } catch (e) {
-            // Non-critical — silently continue if we can't self-link
-            console.warn('[Plugins Manager] Could not auto-link to GitHub repo:', e.message);
-        }
     }
 
     onUnload() {
@@ -363,6 +345,11 @@ class Plugin extends AppPlugin {
 
             for (const repoUrl of repos) {
                 try {
+                    // Security: only fetch HTTPS URLs to prevent data exfiltration
+                    if (!repoUrl.startsWith('https://')) {
+                        console.warn('[Plugins Manager] Skipping non-HTTPS community repo:', repoUrl);
+                        continue;
+                    }
                     const res = await fetch(repoUrl);
                     if (!res.ok) continue;
                     const text = await res.text();
@@ -382,16 +369,20 @@ class Plugin extends AppPlugin {
                             currentCategory = line.replace(/#/g, '').trim();
                         } else if (line.startsWith('- [')) {
                             const match = line.match(/- \[(.*?)\]\((.*?)\)(?: - (.*))?/);
-                            if (match && match[2].startsWith('http')) {
-                                // Determine type from category
+                            if (match && match[2].startsWith('https://')) {
+                                // Security: only accept HTTPS GitHub URLs in discover list
+                                const itemUrl = match[2];
                                 const catLower = currentCategory.toLowerCase();
                                 let type = 'app';
                                 if (catLower.includes('collection')) type = 'collection';
                                 else if (catLower.includes('theme')) type = 'theme';
 
+                                // For non-theme items, require valid GitHub URL
+                                if (type !== 'theme' && !this._isValidGithubUrl(itemUrl)) continue;
+
                                 items.push({
                                     name: match[1],
-                                    url: match[2],
+                                    url: itemUrl,
                                     description: match[3] || '',
                                     category: currentCategory,
                                     type: type,
@@ -567,7 +558,7 @@ class Plugin extends AppPlugin {
 
                     try {
                         if (isTheme) {
-                            const cssText = await this._fetchThemeCSS(item.url);
+                            const cssText = this._sanitizeCSS(await this._fetchThemeCSS(item.url));
                             const existingIdx = this._savedThemes.findIndex(t => t.source === item.url || t.name === item.name);
 
                             if (existingIdx > -1) {
@@ -833,7 +824,7 @@ class Plugin extends AppPlugin {
         this.ui.addToaster({ title: 'Fetching theme CSS...', autoDestroyTime: 2000, dismissible: true });
 
         try {
-            const cssText = await this._fetchThemeCSS(url);
+            const cssText = this._sanitizeCSS(await this._fetchThemeCSS(url));
             const { owner, repo } = this._parseGithubUrl(url);
             const name = prompt('Name this theme:', repo || 'My Theme');
             if (!name) return;
@@ -1245,8 +1236,56 @@ class Plugin extends AppPlugin {
         if (/^\s*import\s+/m.test(jsCode) || /^\s*export\s+/m.test(jsCode)) {
             throw new Error(`"${name || 'Unknown'}" uses ES module syntax (import/export) which is not compatible with Thymer's plugin system.`);
         }
-        try { new Function(jsCode); }
-        catch (e) { throw new Error(`"${name || 'Unknown'}" has a code error: ${e.message}`); }
+        // Security: removed new Function(jsCode) — it compiles arbitrary code pre-install.
+        // Thymer's own runtime will surface syntax errors when the plugin loads.
+    }
+
+    /** Security: Whitelist allowed plugin.json config keys and enforce size limits */
+    _sanitizePluginConfig(jsonConf) {
+        const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions', '__source_repo', 'ver'];
+        const sanitized = {};
+        for (const key of ALLOWED_KEYS) {
+            if (jsonConf[key] !== undefined) {
+                sanitized[key] = jsonConf[key];
+            }
+        }
+        return sanitized;
+    }
+
+    /** Security: Strip dangerous CSS constructs that could exfiltrate data or execute scripts */
+    _sanitizeCSS(cssText) {
+        if (!cssText) return cssText;
+        let sanitized = cssText;
+        const warnings = [];
+
+        // Strip @import rules (could load external resources/tracking pixels)
+        if (/@import\s/i.test(sanitized)) {
+            sanitized = sanitized.replace(/@import\s[^;]*;?/gi, '/* [removed @import] */');
+            warnings.push('@import rules were removed for security');
+        }
+
+        // Strip expression() calls (IE script execution vector)
+        if (/expression\s*\(/i.test(sanitized)) {
+            sanitized = sanitized.replace(/expression\s*\([^)]*\)/gi, '/* [removed expression()] */');
+            warnings.push('expression() calls were removed for security');
+        }
+
+        // Warn about external url() references (don't block — legitimate for fonts)
+        const externalUrls = sanitized.match(/url\s*\(\s*['"]?https?:\/\//gi);
+        if (externalUrls && externalUrls.length > 0) {
+            warnings.push(`${externalUrls.length} external url() reference(s) found — review these if you did not author this theme`);
+        }
+
+        if (warnings.length > 0) {
+            this.ui.addToaster({
+                title: 'CSS Security Notice',
+                message: warnings.join('. ') + '.',
+                autoDestroyTime: 6000,
+                dismissible: true
+            });
+        }
+
+        return sanitized;
     }
 
     /** Escape HTML entities to prevent XSS when injecting user-controlled strings into innerHTML */
@@ -1259,11 +1298,12 @@ class Plugin extends AppPlugin {
             .replace(/'/g, '&#39;');
     }
 
-    /** Validate that a URL points to github.com */
+    /** Validate that a URL points to github.com over HTTPS */
     _isValidGithubUrl(url) {
         try {
             const parsed = new URL(url);
-            return parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com';
+            return parsed.protocol === 'https:' &&
+                (parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com');
         } catch (e) {
             return false;
         }
@@ -1312,13 +1352,13 @@ class Plugin extends AppPlugin {
      * Falls back through branches (main, master).
      */
     async _listRepoDirectory(owner, repo, subpath) {
-        const headers = {};
-        if (this.githubPat) headers['Authorization'] = `token ${this.githubPat}`;
+        const apiHeaders = {};
+        if (this.githubPat) apiHeaders['Authorization'] = `token ${this.githubPat}`;
 
         const path = subpath || '';
         const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
 
-        const res = await fetch(apiUrl, { headers });
+        const res = await fetch(apiUrl, { headers: apiHeaders });
         if (!res.ok) throw new Error(`Could not list directory: ${owner}/${repo}/${path}`);
 
         const files = await res.json();
@@ -1383,9 +1423,10 @@ class Plugin extends AppPlugin {
         const { owner, repo, subpath } = this._parseGithubUrl(url);
         if (!owner || !repo) throw new Error("Invalid GitHub URL. Expected format: https://github.com/user/repo");
 
-        const headers = {};
+        // PAT auth headers — only for api.github.com, NOT for raw.githubusercontent.com (triggers CORS preflight)
+        const apiHeaders = {};
         if (this.githubPat) {
-            headers['Authorization'] = `token ${this.githubPat}`;
+            apiHeaders['Authorization'] = `token ${this.githubPat}`;
         }
 
         const prefix = subpath ? `${subpath}/` : '';
@@ -1397,10 +1438,10 @@ class Plugin extends AppPlugin {
             const jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
 
             try {
-                const jsonRes = await fetch(jsonUrl, { headers });
+                const jsonRes = await fetch(jsonUrl);
                 if (jsonRes.ok) {
                     const pluginJson = await jsonRes.json();
-                    const jsRes = await fetch(jsUrl, { headers });
+                    const jsRes = await fetch(jsUrl);
                     if (jsRes.ok) {
                         const pluginJs = await jsRes.text();
                         pluginJson.__source_repo = url;
@@ -1427,7 +1468,7 @@ class Plugin extends AppPlugin {
         if (!jsFile) throw new Error(`No code file (.js) found in ${label}`);
 
         // Fetch the actual file contents
-        const jsonRes = await fetch(jsonFile.download_url, { headers });
+        const jsonRes = await fetch(jsonFile.download_url);
         if (!jsonRes.ok) throw new Error(`Failed to download ${jsonFile.name}`);
 
         let pluginJson;
@@ -1438,7 +1479,7 @@ class Plugin extends AppPlugin {
             throw new Error(`${jsonFile.name} is not valid JSON`);
         }
 
-        const jsRes = await fetch(jsFile.download_url, { headers });
+        const jsRes = await fetch(jsFile.download_url);
         if (!jsRes.ok) throw new Error(`Failed to download ${jsFile.name}`);
         const pluginJs = await jsRes.text();
 
@@ -1450,7 +1491,7 @@ class Plugin extends AppPlugin {
         const result = { json: pluginJson, js: pluginJs };
         if (cssFile) {
             try {
-                const cssRes = await fetch(cssFile.download_url, { headers });
+                const cssRes = await fetch(cssFile.download_url);
                 if (cssRes.ok) result.css = await cssRes.text();
             } catch (e) { /* CSS is optional */ }
         }
@@ -1557,7 +1598,15 @@ class Plugin extends AppPlugin {
         // Validate JS before saving — catch issues that would crash Thymer's runtime
         this._validatePluginJS(jsonConf.name, jsCode);
 
-        await targetPlugin.savePlugin(jsonConf, jsCode);
+        // Security: sanitize config to only keep expected fields
+        const sanitizedConf = this._sanitizePluginConfig(jsonConf);
+
+        // Security: enforce code size limit (500KB)
+        if (jsCode && jsCode.length > 500 * 1024) {
+            throw new Error(`"${jsonConf.name || 'Unknown'}" code exceeds the 500KB size limit.`);
+        }
+
+        await targetPlugin.savePlugin(sanitizedConf, jsCode);
         this._autoExport();  // fire-and-forget
         return targetPlugin;
     }
