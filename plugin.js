@@ -147,7 +147,7 @@ class Plugin extends AppPlugin {
                         <input type="text" id="pm-discover-search" class="pm-input pm-search-input" placeholder="Search plugins, themes..." autocomplete="off" />
                         <div class="pm-filter-chips">
                             <button class="pm-filter-chip active" data-filter="all">All</button>
-                            <button class="pm-filter-chip" data-filter="app">App Plugins</button>
+                            <button class="pm-filter-chip" data-filter="app">Plugins</button>
                             <button class="pm-filter-chip" data-filter="collection">Collections</button>
                             <button class="pm-filter-chip" data-filter="theme">Themes</button>
                         </div>
@@ -465,8 +465,8 @@ class Plugin extends AppPlugin {
         items.forEach(item => {
             const isCollection = item.type === 'collection';
             const isTheme = item.type === 'theme';
-            const badgeText = isTheme ? 'Theme' : (isCollection ? 'Collection' : 'App');
-            const badgeClass = isTheme ? 'pm-badge-theme' : (isCollection ? 'pm-badge-collection' : 'pm-badge-app');
+            const badgeText = isTheme ? 'Theme' : (isCollection ? 'Collection' : 'Plugin');
+            const badgeClass = isTheme ? 'pm-badge-theme' : (isCollection ? 'pm-badge-collection' : 'pm-badge-plugin');
 
             const card = document.createElement('div');
             card.className = 'pm-card';
@@ -580,8 +580,8 @@ class Plugin extends AppPlugin {
                             installBtn.className = 'pm-btn';
                             installBtn.innerText = 'Saved';
                         } else {
-                            const { json, js } = await this.fetchGithubRepo(item.url);
-                            await this.installPlugin(json, js);
+                            const { json, js, css } = await this.fetchGithubRepo(item.url);
+                            await this.installPlugin(json, js, { interactive: false, cssCode: css });
                             this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
                             installBtn.innerText = 'Installed';
                             this.loadPlugins(container);
@@ -679,9 +679,9 @@ class Plugin extends AppPlugin {
 
                 // Reinstall button — force re-download from source without version check
                 const reinstallBtn = document.createElement('button');
-                reinstallBtn.className = 'pm-btn';
+                reinstallBtn.className = 'pm-btn pm-btn-reinstall';
                 reinstallBtn.title = 'Reinstall from source (force overwrite)';
-                reinstallBtn.appendChild(this.ui.createIcon('download-cloud'));
+                reinstallBtn.appendChild(this.ui.createIcon('download'));
                 actionsContainer.appendChild(reinstallBtn);
 
                 reinstallBtn.addEventListener('click', async () => {
@@ -691,10 +691,14 @@ class Plugin extends AppPlugin {
                         reinstallBtn.appendChild(this.ui.createIcon('loader'));
                         reinstallBtn.disabled = true;
 
-                        const { json: remoteJson, js: remoteJs } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
+                        const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
                         this._validatePluginJS(remoteJson.name, remoteJs);
                         const sanitizedConf = this._sanitizePluginConfig(remoteJson);
                         await p.savePlugin(sanitizedConf, remoteJs);
+                        if (remoteCss) {
+                            const sanitizedCSS = this._sanitizeCSS(remoteCss);
+                            await p.saveCSS(sanitizedCSS);
+                        }
                         this._autoExport();
                         this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
                         this.loadPlugins(panelContainer);
@@ -705,51 +709,42 @@ class Plugin extends AppPlugin {
                         reinstallBtn.disabled = false;
                     }
                 });
-            } else {
-                // Local plugin — offer to link a GitHub repo for updates
-                const linkBtn = document.createElement('button');
-                linkBtn.className = 'pm-btn';
-                linkBtn.title = 'Link to a GitHub repo for updates';
-                linkBtn.appendChild(this.ui.createIcon('link'));
-                actionsContainer.appendChild(linkBtn);
-
-                linkBtn.addEventListener('click', async () => {
-                    const repoUrl = prompt('Enter the GitHub repo URL for this plugin:');
-                    if (!repoUrl) return;
-                    if (!this._isValidGithubUrl(repoUrl)) {
-                        this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
-                        return;
-                    }
-                    try {
-                        const { json: currentJson, code: currentCode } = p.getExistingCodeAndConfig();
-                        currentJson.__source_repo = repoUrl;
-                        await p.savePlugin(currentJson, currentCode);
-
-                        // Update card in-place instead of full re-render (avoids panel-reload race)
-                        actionsContainer.removeChild(linkBtn);
-                        const newUpdateBtn = document.createElement('button');
-                        newUpdateBtn.className = 'pm-btn pm-btn-update';
-                        newUpdateBtn.title = 'Check Update';
-                        newUpdateBtn.appendChild(this.ui.createIcon('refresh'));
-                        actionsContainer.insertBefore(newUpdateBtn, actionsContainer.firstChild);
-                        newUpdateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, currentJson, repoUrl, newUpdateBtn, panelContainer));
-
-                        // Swap badge to GitHub
-                        const badge = card.querySelector(`#pm-badge-type-${p.getGuid()}`);
-                        if (badge) { badge.innerHTML = ''; badge.appendChild(this.ui.createIcon('cloud')); badge.appendChild(document.createTextNode(' GitHub')); }
-
-                        this.ui.addToaster({ title: 'Repo Linked', message: `${conf.name} linked to ${repoUrl}. You can now check for updates.`, autoDestroyTime: 4000, dismissible: true });
-                    } catch (e) {
-                        this.ui.addToaster({ title: 'Link Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
-                    }
-                });
             }
+
+            // Always offer to link or edit a GitHub repo for updates
+            const linkBtn = document.createElement('button');
+            linkBtn.className = 'pm-btn';
+            linkBtn.title = sourceRepo ? 'Edit GitHub repo link' : 'Link to a GitHub repo for updates';
+            linkBtn.appendChild(this.ui.createIcon('link'));
+            actionsContainer.appendChild(linkBtn);
+
+            linkBtn.addEventListener('click', async () => {
+                const repoUrl = prompt('Enter the GitHub repo URL for this plugin:', sourceRepo || '');
+                if (repoUrl === null) return; // cancelled
+                if (repoUrl === '') {
+                    // Remove link
+                    if (!confirm('Clear the repository link? This will disable updates.')) return;
+                } else if (!this._isValidGithubUrl(repoUrl)) {
+                    this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
+                    return;
+                }
+
+                try {
+                    const { json: currentJson, code: currentCode } = p.getExistingCodeAndConfig();
+                    currentJson.__source_repo = repoUrl;
+                    await p.savePlugin(currentJson, currentCode);
+                    this.ui.addToaster({ title: 'Repo Updated', message: repoUrl ? `${conf.name} linked to ${repoUrl}.` : `${conf.name} link removed.`, autoDestroyTime: 4000, dismissible: true });
+                    this.loadPlugins(panelContainer);
+                } catch (e) {
+                    this.ui.addToaster({ title: 'Update Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
+                }
+            });
 
             // Add Native Delete Button
             const deleteBtn = document.createElement('button');
             deleteBtn.className = 'pm-btn danger pm-btn-delete';
             deleteBtn.title = 'Delete Plugin';
-            deleteBtn.appendChild(this.ui.createIcon('x')); // 'x' or 'trash' might not exist, 'x' is close/delete in Thymer usually
+            deleteBtn.appendChild(this.ui.createIcon('trash')); // trash usually exists in Thymer/Lucide
             actionsContainer.appendChild(deleteBtn);
 
             deleteBtn.addEventListener('click', async () => {
@@ -1617,7 +1612,7 @@ class Plugin extends AppPlugin {
 
         try {
             this.ui.addToaster({ title: "Fetching plugin...", autoDestroyTime: 2000, dismissible: true });
-            const { json, js } = await this.fetchGithubRepo(url);
+            const { json, js, css } = await this.fetchGithubRepo(url);
 
             // Validate type
             let pType = json.type;
@@ -1635,7 +1630,7 @@ class Plugin extends AppPlugin {
                 }
             }
 
-            await this.installPlugin(json, js);
+            await this.installPlugin(json, js, { cssCode: css });
             this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
             this.loadPlugins(container);
         } catch (err) {
@@ -1643,10 +1638,10 @@ class Plugin extends AppPlugin {
         }
     }
 
-    async installPlugin(jsonConf, jsCode, { interactive = true } = {}) {
+    async installPlugin(jsonConf, jsCode, { interactive = true, cssCode = null } = {}) {
         // Skip the Plugins Manager itself — it doesn't need to be reinstalled
         const name = (jsonConf.name || '').toLowerCase();
-        if (name === 'plugins manager' || name === 'plugins manager') {
+        if (name === 'plugins manager') {
             return 'skipped';
         }
 
@@ -1717,6 +1712,13 @@ class Plugin extends AppPlugin {
         }
 
         await targetPlugin.savePlugin(sanitizedConf, jsCode);
+
+        // Security: sanitize and save CSS if provided
+        if (cssCode) {
+            const sanitizedCSS = this._sanitizeCSS(cssCode);
+            await targetPlugin.saveCSS(sanitizedCSS);
+        }
+
         this._autoExport();  // fire-and-forget
         return targetPlugin;
     }
@@ -1845,9 +1847,9 @@ class Plugin extends AppPlugin {
                 for (const url of urls) {
                     const shortUrl = url.replace(/https?:\/\/github\.com\//, '');
                     try {
-                        const { json, js } = await this.fetchGithubRepo(url);
+                        const { json, js, css } = await this.fetchGithubRepo(url);
                         const pName = json.name || shortUrl;
-                        const result = await this.installPlugin(json, js, { interactive: !isFullOverride });
+                        const result = await this.installPlugin(json, js, { interactive: !isFullOverride, cssCode: css });
                         if (result === 'skipped') { skippedNames.push(pName); }
                         else { successCount++; }
                     } catch (e) {
@@ -1879,7 +1881,7 @@ class Plugin extends AppPlugin {
             btnEl.appendChild(this.ui.createIcon('loader'));
             btnEl.disabled = true;
 
-            const { json: remoteJson, js: remoteJs } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
+            const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
 
             if (remoteJson.version === currentConf.version) {
                 this.ui.addToaster({ title: "Up to date", message: `${currentConf.name} is already on the latest version.`, autoDestroyTime: 3000, dismissible: true });
@@ -1910,7 +1912,14 @@ class Plugin extends AppPlugin {
                 // Local modifications warning check (simple length/hash comparison could go here in future)
                 if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
                     this._validatePluginJS(remoteJson.name, remoteJs);
-                    await pluginObj.savePlugin(remoteJson, remoteJs);
+                    const sanitizedConf = this._sanitizePluginConfig(remoteJson);
+                    await pluginObj.savePlugin(sanitizedConf, remoteJs);
+
+                    if (remoteCss) {
+                        const sanitizedCSS = this._sanitizeCSS(remoteCss);
+                        await pluginObj.saveCSS(sanitizedCSS);
+                    }
+
                     this._autoExport();  // fire-and-forget
                     this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
                     this.loadPlugins(container);

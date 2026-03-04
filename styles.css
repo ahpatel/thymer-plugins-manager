@@ -159,23 +159,47 @@
 }
 
 .pm-btn.danger {
-    color: #ef4444;
-    border-color: #ef4444;
+    color: var(--pm-text-muted);
+    border-color: var(--pm-border-default);
+    background: transparent;
 }
 
 .pm-btn.danger:hover {
     background: #ef4444;
     color: white;
+    border-color: #ef4444;
 }
 
-.pm-btn.update-btn {
-    color: #10b981;
-    border-color: #10b981;
-}
-
-.pm-btn.update-btn:hover {
-    background: #10b981;
+.pm-btn.pm-btn-update {
+    background: var(--enum-purple-bg, #8b5cf6);
     color: white;
+    border-color: var(--enum-purple-bg, #8b5cf6);
+}
+
+.pm-btn.pm-btn-update:hover {
+    filter: brightness(.6);
+}
+
+.pm-btn.pm-btn-reinstall {
+    background: var(--enum-green-bg, #10b981);
+    color: white;
+    border-color: var(--enum-green-bg, #10b981);
+}
+
+.pm-btn.pm-btn-reinstall:hover {
+    filter: brightness(.6);
+}
+
+.pm-btn.pm-btn-delete {
+    color: var(--pm-text-muted);
+    border-color: var(--pm-border-default);
+    background: transparent;
+}
+
+.pm-btn.pm-btn-delete:hover {
+    background: #ef4444;
+    color: white;
+    border-color: #ef4444;
 }
 
 .pm-input-group {
@@ -226,7 +250,7 @@
     border-color: #f59e0b;
 }
 
-.pm-badge-app {
+.pm-badge-plugin {
     background: rgba(59, 130, 246, 0.15);
     color: #60a5fa;
     border-color: rgba(59, 130, 246, 0.3);
