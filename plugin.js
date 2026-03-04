@@ -12,7 +12,24 @@ class Plugin extends AppPlugin {
                 delete this._incompatiblePlugins[k];
         });
         localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
-        this._savedThemes = JSON.parse(localStorage.getItem('pm_saved_themes') || '[]');
+        const conf = this.getConfiguration();
+        let savedThemes = conf?.custom?.saved_themes;
+
+        if (!savedThemes) {
+            const oldThemesRaw = localStorage.getItem('pm_saved_themes');
+            if (oldThemesRaw) {
+                try {
+                    savedThemes = JSON.parse(oldThemesRaw);
+                    // Schedule migration to config after load
+                    setTimeout(() => {
+                        this._savedThemes = savedThemes;
+                        this._saveThemes();
+                    }, 1000);
+                } catch (e) { }
+            }
+        }
+
+        this._savedThemes = savedThemes || [];
         this._autoExportEnabled = localStorage.getItem('pm_auto_export') === 'true';
         this._autoExportDirHandle = null;
         this._autoExportDirName = localStorage.getItem('pm_auto_export_dir_name') || '';
@@ -111,7 +128,7 @@ class Plugin extends AppPlugin {
         const html = `
             <div class="pm-container">
                 <div class="pm-header">
-                    <h1>Plugins Manager</h1>
+                    <h1 style="margin: 0;">Plugins Manager</h1>
                 </div>
                 
                 <div class="pm-tabs">
@@ -209,28 +226,35 @@ class Plugin extends AppPlugin {
         const element = panel.getElement();
         if (element) {
             element.innerHTML = html;
-            this.bindEvents(element);
+            this.bindEvents(element, panel);
             this.loadPlugins(element);
             // Discover tab is loaded lazily on first click (see bindEvents)
         }
     }
 
-    bindEvents(container) {
+    bindEvents(container, panel) {
         // Tabs
-        container.querySelectorAll('.pm-tab').forEach(tab => {
-            tab.addEventListener('click', (e) => {
-                const clickedTab = e.currentTarget; // use currentTarget so child spans work
-                container.querySelectorAll('.pm-tab').forEach(t => t.classList.remove('active'));
-                container.querySelectorAll('.pm-tab-content').forEach(c => c.classList.remove('active'));
+        container.querySelector('.pm-tabs').addEventListener('click', (e) => {
+            const tabBtn = e.target.closest('.pm-tab');
+            if (!tabBtn) return;
+            // Remove active classes
+            container.querySelectorAll('.pm-tab').forEach(el => el.classList.remove('active'));
+            container.querySelectorAll('.pm-tab-content').forEach(el => el.classList.remove('active'));
 
-                clickedTab.classList.add('active');
-                container.querySelector(`#tab-${clickedTab.dataset.tab}`).classList.add('active');
+            // Add active class
+            tabBtn.classList.add('active');
+            const tabId = tabBtn.getAttribute('data-tab');
+            container.querySelector(`#tab-${tabId}`).classList.add('active');
 
-                // Lazy-load Discover tab on first click
-                if (clickedTab.dataset.tab === 'discover' && !this._discoverItems) {
-                    this.loadDiscoverPlugins(container);
-                }
-            });
+            // Lazy-load Discover tab on first click
+            if (tabId === 'discover' && !this._discoverItems) {
+                this.loadDiscoverPlugins(container);
+            }
+
+            if (tabId === 'global') this._renderGlobalList(container);
+            else if (tabId === 'collections') this._renderCollectionsList(container);
+            else if (tabId === 'discover') this._renderDiscoverList(container);
+            else if (tabId === 'themes') this._renderThemesList(container);
         });
 
         // Responsive: toggle 'narrow' (icon tabs) and 'wide' (multi-col cards) based on container width
@@ -763,8 +787,14 @@ class Plugin extends AppPlugin {
 
     // --- Theme Library ---
 
-    _saveThemes() {
-        localStorage.setItem('pm_saved_themes', JSON.stringify(this._savedThemes));
+    async _saveThemes() {
+        const conf = this.getConfiguration();
+        if (!conf.custom) conf.custom = {};
+        conf.custom.saved_themes = this._savedThemes;
+        const plugin = this.data.getPluginByGuid(this.getGuid());
+        if (plugin) {
+            await plugin.saveConfiguration(conf);
+        }
     }
 
     _renderThemesList(container) {
