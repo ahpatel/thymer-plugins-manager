@@ -38,6 +38,24 @@ class Plugin extends AppPlugin {
 
         // Start automated update checker
         this.startAutomatedUpdateChecker();
+
+        // Auto-link this plugin to its GitHub repo so it can self-update.
+        // If the user has already set a custom __source_repo, respect it.
+        this._ensureSelfLinked();
+    }
+
+    async _ensureSelfLinked() {
+        const DEFAULT_REPO = 'https://github.com/ahpatel/thymer-plugins-manager';
+        try {
+            const { json, code } = this.getExistingCodeAndConfig();
+            if (!json.__source_repo) {
+                json.__source_repo = DEFAULT_REPO;
+                await this.savePlugin(json, code);
+            }
+        } catch (e) {
+            // Non-critical — silently continue if we can't self-link
+            console.warn('[Plugins Manager] Could not auto-link to GitHub repo:', e.message);
+        }
     }
 
     onUnload() {
