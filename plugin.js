@@ -24,11 +24,10 @@ class Plugin extends AppPlugin {
             this.renderUI(panel);
         });
 
-        // Add a sidebar button to launch it
-        this.ui.addSidebarItem({
-            label: "Plugins Manager",
+        // Add a status bar button to launch it
+        this.ui.addStatusBarItem({
             icon: "box",
-            tooltip: "Manage your Thymer plugins",
+            tooltip: "Plugins Manager",
             onClick: async () => {
                 const newPanel = await this.ui.createPanel();
                 if (newPanel) {
