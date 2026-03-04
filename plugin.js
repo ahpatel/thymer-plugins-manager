@@ -676,6 +676,35 @@ class Plugin extends AppPlugin {
                 actionsContainer.appendChild(updateBtn);
 
                 updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
+
+                // Reinstall button — force re-download from source without version check
+                const reinstallBtn = document.createElement('button');
+                reinstallBtn.className = 'pm-btn';
+                reinstallBtn.title = 'Reinstall from source (force overwrite)';
+                reinstallBtn.appendChild(this.ui.createIcon('download-cloud'));
+                actionsContainer.appendChild(reinstallBtn);
+
+                reinstallBtn.addEventListener('click', async () => {
+                    if (!confirm(`Reinstall ${conf.name} from source?\n\nThis will overwrite local code with the latest from GitHub, even if the version number hasn't changed.`)) return;
+                    try {
+                        reinstallBtn.innerHTML = '';
+                        reinstallBtn.appendChild(this.ui.createIcon('loader'));
+                        reinstallBtn.disabled = true;
+
+                        const { json: remoteJson, js: remoteJs } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
+                        this._validatePluginJS(remoteJson.name, remoteJs);
+                        const sanitizedConf = this._sanitizePluginConfig(remoteJson);
+                        await p.savePlugin(sanitizedConf, remoteJs);
+                        this._autoExport();
+                        this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
+                        this.loadPlugins(panelContainer);
+                    } catch (e) {
+                        this.ui.addToaster({ title: 'Reinstall Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
+                        reinstallBtn.innerHTML = '';
+                        reinstallBtn.appendChild(this.ui.createIcon('download-cloud'));
+                        reinstallBtn.disabled = false;
+                    }
+                });
             } else {
                 // Local plugin — offer to link a GitHub repo for updates
                 const linkBtn = document.createElement('button');
