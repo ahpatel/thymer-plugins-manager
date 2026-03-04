@@ -1089,7 +1089,7 @@ class Plugin extends AppPlugin {
         if (!owner || !repo) throw new Error("Invalid GitHub URL.");
 
         const prefix = subpath ? `${subpath}/` : '';
-        const cssFilenames = ['plugin.css', 'styles.css', 'theme.css', 'style.css'];
+        const cssFilenames = ['plugin.css', 'styles.css', 'theme.css', 'style.css', `${repo}-plugin.css`, 'Custom CSS'];
 
         // Strategy 1: Try common CSS filenames via raw.githubusercontent.com
         for (const branch of ['main', 'master']) {
@@ -1432,23 +1432,57 @@ class Plugin extends AppPlugin {
         const prefix = subpath ? `${subpath}/` : '';
         const label = `${owner}/${repo}${subpath ? '/' + subpath : ''}`;
 
-        // ----- Strategy 1: Try standard filenames via raw.githubusercontent.com (fast, no CORS issues) -----
-        for (const branch of ['main', 'master']) {
-            const jsonUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.json`;
-            const jsUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}plugin.js`;
+        // ----- Strategy 1: Try common filename patterns via raw.githubusercontent.com (fast, no API needed) -----
+        // Build candidate filename lists based on common conventions:
+        //   - Standard: plugin.json / plugin.js
+        //   - SDK pattern: {repo}-plugin.json / {repo}-plugin.js
+        //   - Thymer export names (extensionless): Config / Custom Code
+        const jsonCandidates = ['plugin.json', `${repo}-plugin.json`, 'Config'];
+        const jsCandidates = ['plugin.js', `${repo}-plugin.js`, 'Custom Code'];
 
-            try {
-                const jsonRes = await fetch(jsonUrl);
-                if (jsonRes.ok) {
-                    const pluginJson = await jsonRes.json();
-                    const jsRes = await fetch(jsUrl);
+        for (const branch of ['main', 'master']) {
+            const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}`;
+
+            // Try each JSON candidate until one responds OK
+            let foundJson = null;
+            for (const jsonName of jsonCandidates) {
+                try {
+                    const jsonRes = await fetch(baseUrl + jsonName);
+                    if (jsonRes.ok) {
+                        const text = await jsonRes.text();
+                        try {
+                            foundJson = JSON.parse(text);
+                            break;
+                        } catch (e) { /* not valid JSON, try next */ }
+                    }
+                } catch (e) { /* try next */ }
+            }
+            if (!foundJson) continue;
+
+            // Try each JS candidate until one responds OK
+            for (const jsName of jsCandidates) {
+                try {
+                    const jsRes = await fetch(baseUrl + jsName);
                     if (jsRes.ok) {
                         const pluginJs = await jsRes.text();
-                        pluginJson.__source_repo = url;
-                        return { json: pluginJson, js: pluginJs };
+                        foundJson.__source_repo = url;
+
+                        // Also try to grab CSS while we're here
+                        const cssCandidates = ['plugin.css', 'styles.css', `${repo}-plugin.css`, 'Custom CSS'];
+                        const result = { json: foundJson, js: pluginJs };
+                        for (const cssName of cssCandidates) {
+                            try {
+                                const cssRes = await fetch(baseUrl + cssName);
+                                if (cssRes.ok) {
+                                    result.css = await cssRes.text();
+                                    break;
+                                }
+                            } catch (e) { /* CSS is optional */ }
+                        }
+                        return result;
                     }
-                }
-            } catch (e) { /* try next branch */ }
+                } catch (e) { /* try next */ }
+            }
         }
 
         // ----- Strategy 2: Use GitHub API to discover files in the directory -----
