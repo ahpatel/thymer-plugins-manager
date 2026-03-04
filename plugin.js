@@ -126,8 +126,8 @@ class Plugin extends AppPlugin {
                 <div class="pm-tab-content active" id="tab-global">
                     <div class="pm-tab-actions">
                         <button class="pm-btn primary" id="pm-install-global-btn">Install Global Plugin</button>
-                        <button class="pm-btn" id="pm-import-global-btn">Import Apps</button>
-                        <button class="pm-btn" id="pm-export-global-btn">Export Apps</button>
+                        <button class="pm-btn" id="pm-import-global-btn">Import Plugins</button>
+                        <button class="pm-btn" id="pm-export-global-btn">Export Plugins</button>
                     </div>
                     <div id="pm-global-list" class="pm-list-container">Loading...</div>
                 </div>
@@ -1752,28 +1752,44 @@ class Plugin extends AppPlugin {
 
     async showExportDialog(typeFilter) {
         const allData = await this._getExportData();
-        let exportData;
+        let candidateData;
         if (typeFilter === 'app') {
-            exportData = allData.filter(d => d.type !== 'collection');
+            candidateData = allData.filter(d => d.type !== 'collection');
         } else if (typeFilter === 'collection') {
-            exportData = allData.filter(d => d.type === 'collection');
+            candidateData = allData.filter(d => d.type === 'collection');
         } else {
-            exportData = allData;
+            candidateData = allData;
         }
 
-        // Simple list of URLs format
-        const urls = exportData.map(d => d.source_repo).filter(Boolean).join('\n');
-
-        // Full Backup Format
-        const fullBackup = JSON.stringify(exportData, null, 2);
-
         const typeLabel = typeFilter === 'app' ? 'Global Plugins' : 'Collection Plugins';
+
+        // Build the selection list HTML
+        const selectionRows = candidateData.map((d, i) => `
+            <label style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--pm-border-default); cursor:pointer;">
+                <input type="checkbox" class="pm-export-cb" data-index="${i}" checked />
+                <span style="flex:1; font-size:13px;">${this._escHtml(d.name || 'Unnamed')}</span>
+                <span style="font-size:11px; color:var(--pm-text-muted);">${this._escHtml(d.type || '')}</span>
+            </label>
+        `).join('');
 
         const overlayHtml = `
             <div id="pm-export-modal" class="pm-modal">
                 <div class="pm-modal-content pm-export-content">
                     <h3>Export ${typeLabel}</h3>
-                    
+
+                    <div style="margin-bottom:14px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <label style="font-weight:bold; font-size:13px;">Select plugins to export</label>
+                            <div style="display:flex; gap:8px;">
+                                <button class="pm-btn" id="pm-sel-all" style="padding:2px 8px; font-size:11px;">All</button>
+                                <button class="pm-btn" id="pm-sel-none" style="padding:2px 8px; font-size:11px;">None</button>
+                            </div>
+                        </div>
+                        <div id="pm-export-selection" style="max-height:180px; overflow-y:auto; border:1px solid var(--pm-border-default); border-radius:6px; padding:0 10px;">
+                            ${selectionRows || '<p style="font-size:13px;color:var(--pm-text-muted);padding:8px 0;">No plugins found.</p>'}
+                        </div>
+                    </div>
+
                     <div style="margin-bottom: 20px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
                             <label style="font-weight: bold;">Repository URLs (for importing to another workspace)</label>
@@ -1782,12 +1798,12 @@ class Plugin extends AppPlugin {
                                 <button class="pm-btn" id="pm-download-urls" style="padding: 2px 8px; font-size: 11px;">Download URLs</button>
                             </div>
                         </div>
-                        <textarea class="pm-textarea pm-textarea-urls" id="pm-urls-text" readonly>${urls}</textarea>
+                        <textarea class="pm-textarea pm-textarea-urls" id="pm-urls-text" readonly></textarea>
                     </div>
                     
                     <div style="margin-bottom: 15px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-                            <label style="font-weight: bold;">Full Backup (JSON with complete code & config)</label>
+                            <label style="font-weight: bold;">Full Backup (JSON with complete code &amp; config)</label>
                             <div style="display: flex; gap: 5px;">
                                 <button class="pm-btn" id="pm-copy-json" style="padding: 2px 8px; font-size: 11px;">Copy JSON</button>
                                 <button class="pm-btn primary" id="pm-download-json" style="padding: 2px 8px; font-size: 11px;">Download Backup</button>
@@ -1807,30 +1823,54 @@ class Plugin extends AppPlugin {
         tempDiv.innerHTML = overlayHtml;
         document.body.appendChild(tempDiv);
 
-        document.getElementById('pm-full-backup-text').value = fullBackup;
+        // Helper: compute selected export data and refresh the textareas
+        const refreshTextareas = () => {
+            const checked = [...tempDiv.querySelectorAll('.pm-export-cb:checked')].map(cb => candidateData[parseInt(cb.dataset.index)]);
+            const urls = checked.map(d => d.source_repo).filter(Boolean).join('\n');
+            const fullBackup = JSON.stringify(checked, null, 2);
+            tempDiv.querySelector('#pm-urls-text').value = urls;
+            tempDiv.querySelector('#pm-full-backup-text').value = fullBackup;
+        };
 
-        document.getElementById('pm-export-close').addEventListener('click', () => {
+        // Initial fill
+        refreshTextareas();
+
+        // Checkbox changes
+        tempDiv.querySelectorAll('.pm-export-cb').forEach(cb => cb.addEventListener('change', refreshTextareas));
+
+        // Select All / None
+        tempDiv.querySelector('#pm-sel-all').addEventListener('click', () => {
+            tempDiv.querySelectorAll('.pm-export-cb').forEach(cb => cb.checked = true);
+            refreshTextareas();
+        });
+        tempDiv.querySelector('#pm-sel-none').addEventListener('click', () => {
+            tempDiv.querySelectorAll('.pm-export-cb').forEach(cb => cb.checked = false);
+            refreshTextareas();
+        });
+
+        tempDiv.querySelector('#pm-export-close').addEventListener('click', () => {
             document.body.removeChild(tempDiv);
         });
 
         // Copy actions
-        document.getElementById('pm-copy-urls').addEventListener('click', async (e) => {
-            await navigator.clipboard.writeText(urls);
+        tempDiv.querySelector('#pm-copy-urls').addEventListener('click', async (e) => {
+            await navigator.clipboard.writeText(tempDiv.querySelector('#pm-urls-text').value);
             const orig = e.target.innerText;
             e.target.innerText = "Copied!";
             setTimeout(() => e.target.innerText = orig, 2000);
         });
 
-        document.getElementById('pm-copy-json').addEventListener('click', async (e) => {
-            await navigator.clipboard.writeText(fullBackup);
+        tempDiv.querySelector('#pm-copy-json').addEventListener('click', async (e) => {
+            await navigator.clipboard.writeText(tempDiv.querySelector('#pm-full-backup-text').value);
             const orig = e.target.innerText;
             e.target.innerText = "Copied!";
             setTimeout(() => e.target.innerText = orig, 2000);
         });
 
         // Download actions
-        document.getElementById('pm-download-urls').addEventListener('click', () => {
-            const blob = new Blob([urls], { type: 'text/plain' });
+        tempDiv.querySelector('#pm-download-urls').addEventListener('click', () => {
+            const content = tempDiv.querySelector('#pm-urls-text').value;
+            const blob = new Blob([content], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -1841,8 +1881,9 @@ class Plugin extends AppPlugin {
             URL.revokeObjectURL(url);
         });
 
-        document.getElementById('pm-download-json').addEventListener('click', () => {
-            const blob = new Blob([fullBackup], { type: 'application/json' });
+        tempDiv.querySelector('#pm-download-json').addEventListener('click', () => {
+            const content = tempDiv.querySelector('#pm-full-backup-text').value;
+            const blob = new Blob([content], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
