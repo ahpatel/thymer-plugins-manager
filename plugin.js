@@ -84,7 +84,7 @@ class Plugin extends AppPlugin {
                     const { json } = p.getExistingCodeAndConfig();
                     const repo = json.__source_repo;
                     if (repo) {
-                        const { json: remoteJson } = await this.fetchGithubRepo(repo);
+                        const { json: remoteJson } = await this.fetchGithubRepo(repo, { sourceFiles: json.__source_files });
                         if (remoteJson.version && remoteJson.version !== json.version) {
                             updatesAvailable[p.getGuid()] = remoteJson.version;
                         }
@@ -1242,7 +1242,7 @@ class Plugin extends AppPlugin {
 
     /** Security: Whitelist allowed plugin.json config keys and enforce size limits */
     _sanitizePluginConfig(jsonConf) {
-        const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions', '__source_repo', 'ver'];
+        const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions', '__source_repo', '__source_files', 'ver'];
         const sanitized = {};
         for (const key of ALLOWED_KEYS) {
             if (jsonConf[key] !== undefined) {
@@ -1418,7 +1418,7 @@ class Plugin extends AppPlugin {
         return null;
     }
 
-    async fetchGithubRepo(url) {
+    async fetchGithubRepo(url, { sourceFiles } = {}) {
         if (!this._isValidGithubUrl(url)) throw new Error("URL must point to github.com");
         const { owner, repo, subpath } = this._parseGithubUrl(url);
         if (!owner || !repo) throw new Error("Invalid GitHub URL. Expected format: https://github.com/user/repo");
@@ -1431,6 +1431,38 @@ class Plugin extends AppPlugin {
 
         const prefix = subpath ? `${subpath}/` : '';
         const label = `${owner}/${repo}${subpath ? '/' + subpath : ''}`;
+
+        // Helper: build __source_files metadata for caching discovered filenames
+        const buildSourceFiles = (branch, jsonName, jsName, cssName) => {
+            const sf = { branch, json: jsonName, js: jsName };
+            if (cssName) sf.css = cssName;
+            return sf;
+        };
+
+        // ----- Strategy 0: Use cached filenames from a previous discovery (fastest — no probing needed) -----
+        if (sourceFiles && sourceFiles.branch && sourceFiles.json && sourceFiles.js) {
+            const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${sourceFiles.branch}/${prefix}`;
+            try {
+                const jsonRes = await fetch(baseUrl + sourceFiles.json);
+                if (jsonRes.ok) {
+                    const pluginJson = JSON.parse(await jsonRes.text());
+                    const jsRes = await fetch(baseUrl + sourceFiles.js);
+                    if (jsRes.ok) {
+                        const pluginJs = await jsRes.text();
+                        pluginJson.__source_repo = url;
+                        pluginJson.__source_files = buildSourceFiles(sourceFiles.branch, sourceFiles.json, sourceFiles.js, sourceFiles.css);
+                        const result = { json: pluginJson, js: pluginJs };
+                        if (sourceFiles.css) {
+                            try {
+                                const cssRes = await fetch(baseUrl + sourceFiles.css);
+                                if (cssRes.ok) result.css = await cssRes.text();
+                            } catch (e) { /* CSS is optional */ }
+                        }
+                        return result;
+                    }
+                }
+            } catch (e) { /* cached names failed, fall through to full discovery */ }
+        }
 
         // ----- Strategy 1: Try common filename patterns via raw.githubusercontent.com (fast, no API needed) -----
         // Build candidate filename lists based on common conventions:
@@ -1445,6 +1477,7 @@ class Plugin extends AppPlugin {
 
             // Try each JSON candidate until one responds OK
             let foundJson = null;
+            let foundJsonName = null;
             for (const jsonName of jsonCandidates) {
                 try {
                     const jsonRes = await fetch(baseUrl + jsonName);
@@ -1452,6 +1485,7 @@ class Plugin extends AppPlugin {
                         const text = await jsonRes.text();
                         try {
                             foundJson = JSON.parse(text);
+                            foundJsonName = jsonName;
                             break;
                         } catch (e) { /* not valid JSON, try next */ }
                     }
@@ -1470,15 +1504,20 @@ class Plugin extends AppPlugin {
                         // Also try to grab CSS while we're here
                         const cssCandidates = ['plugin.css', 'styles.css', `${repo}-plugin.css`, 'Custom CSS'];
                         const result = { json: foundJson, js: pluginJs };
+                        let foundCssName = null;
                         for (const cssName of cssCandidates) {
                             try {
                                 const cssRes = await fetch(baseUrl + cssName);
                                 if (cssRes.ok) {
                                     result.css = await cssRes.text();
+                                    foundCssName = cssName;
                                     break;
                                 }
                             } catch (e) { /* CSS is optional */ }
                         }
+
+                        // Cache the discovered filenames for future fetches
+                        foundJson.__source_files = buildSourceFiles(branch, foundJsonName, jsName, foundCssName);
                         return result;
                     }
                 } catch (e) { /* try next */ }
@@ -1521,6 +1560,14 @@ class Plugin extends AppPlugin {
         const cssFile = this._findFileByRole(files, 'css');
 
         pluginJson.__source_repo = url;
+        // Cache discovered filenames — detect branch from download_url
+        const branchMatch = jsonFile.download_url && jsonFile.download_url.match(/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/([^/]+)\//);
+        pluginJson.__source_files = buildSourceFiles(
+            branchMatch ? branchMatch[1] : 'main',
+            jsonFile.name,
+            jsFile.name,
+            cssFile ? cssFile.name : null
+        );
 
         const result = { json: pluginJson, js: pluginJs };
         if (cssFile) {
@@ -1803,7 +1850,7 @@ class Plugin extends AppPlugin {
             btnEl.appendChild(this.ui.createIcon('loader'));
             btnEl.disabled = true;
 
-            const { json: remoteJson, js: remoteJs } = await this.fetchGithubRepo(sourceRepo);
+            const { json: remoteJson, js: remoteJs } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
 
             if (remoteJson.version === currentConf.version) {
                 this.ui.addToaster({ title: "Up to date", message: `${currentConf.name} is already on the latest version.`, autoDestroyTime: 3000, dismissible: true });
