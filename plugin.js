@@ -4,6 +4,7 @@ class Plugin extends AppPlugin {
         this.githubPat = localStorage.getItem('pm_github_pat') || '';
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
+        this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}');
         this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}');
         // Evict stale incompatible entries older than 30 days
         const _cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -630,8 +631,8 @@ class Plugin extends AppPlugin {
             const globals = await this.data.getAllGlobalPlugins();
             const collections = await this.data.getAllCollections();
 
-            this.renderPluginList(container, 'pm-global-list', globals);
-            this.renderPluginList(container, 'pm-collections-list', collections);
+            this.renderPluginList(container, 'pm-global-list', globals, 'app');
+            this.renderPluginList(container, 'pm-collections-list', collections, 'collection');
         } catch (err) {
             console.error(err);
             container.querySelector('#pm-global-list').innerHTML = "Error loading plugins.";
@@ -639,11 +640,117 @@ class Plugin extends AppPlugin {
         }
     }
 
-    renderPluginList(panelContainer, containerId, plugins) {
+    _saveDisabledPlugins() {
+        localStorage.setItem('pm_disabled_plugins', JSON.stringify(this._disabledPlugins || {}));
+    }
+
+    _getDisabledPluginsForType(typeFilter) {
+        const allDisabled = Object.values(this._disabledPlugins || {});
+        return allDisabled.filter(item => {
+            if (!item || !item.sourceRepo) return false;
+            const type = (item.type || '').toLowerCase();
+            const normalized = (type === 'global' || type === 'app') ? 'app' : (type === 'collection' ? 'collection' : 'app');
+            return normalized === typeFilter;
+        });
+    }
+
+    async _disablePlugin(pluginObj, conf, panelContainer) {
+        const sourceRepo = conf.__source_repo;
+        if (!sourceRepo) {
+            this.ui.addToaster({
+                title: 'Cannot Disable',
+                message: 'Only plugins linked to a GitHub source can be disabled and re-enabled.',
+                autoDestroyTime: 5000,
+                dismissible: true
+            });
+            return;
+        }
+
+        const pluginName = conf.name || 'this plugin';
+        if (!confirm(`Disable ${pluginName}?\n\nThis removes it from the official Plugins panel. You can re-enable it later from Plugins Manager.`)) {
+            return;
+        }
+
+        const rawType = (conf.type || '').toLowerCase();
+        const normalizedType = (rawType === 'collection') ? 'collection' : 'app';
+
+        this._disabledPlugins[sourceRepo] = {
+            name: conf.name || 'Unnamed Plugin',
+            type: normalizedType,
+            sourceRepo,
+            sourceFiles: conf.__source_files || null,
+            version: conf.version || conf.ver || '',
+            dateDisabled: new Date().toISOString()
+        };
+        this._saveDisabledPlugins();
+
+        await pluginObj.trashPlugin();
+        this._autoExport();
+        this.ui.addToaster({ title: 'Plugin disabled', message: `${pluginName} can be re-enabled anytime.`, dismissible: true, autoDestroyTime: 3500 });
+        this.loadPlugins(panelContainer);
+    }
+
+    async _enableDisabledPlugin(disabledPlugin, panelContainer, enableBtn) {
+        const sourceRepo = disabledPlugin.sourceRepo;
+        try {
+            enableBtn.innerHTML = '';
+            enableBtn.appendChild(this.ui.createIcon('loader'));
+            enableBtn.disabled = true;
+
+            const { json, js, css } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: disabledPlugin.sourceFiles });
+            await this.installPlugin(json, js, { interactive: false, cssCode: css });
+
+            delete this._disabledPlugins[sourceRepo];
+            this._saveDisabledPlugins();
+
+            this.ui.addToaster({ title: 'Plugin enabled', message: `${json.name || disabledPlugin.name} reinstalled.`, dismissible: true, autoDestroyTime: 3500 });
+            this.loadPlugins(panelContainer);
+        } catch (e) {
+            enableBtn.innerHTML = '';
+            enableBtn.innerHTML = '<span class="pm-state-icon" aria-hidden="true">●</span>';
+            enableBtn.disabled = false;
+            this.ui.addToaster({ title: 'Enable Failed', message: e.message, dismissible: true, autoDestroyTime: 5000 });
+        }
+    }
+
+    _renderDisabledPluginCards(panelContainer, container, typeFilter) {
+        const disabledPlugins = this._getDisabledPluginsForType(typeFilter);
+        if (disabledPlugins.length === 0) return;
+
+        disabledPlugins.forEach(disabled => {
+            const disabledDate = disabled.dateDisabled ? new Date(disabled.dateDisabled).toLocaleDateString() : 'Unknown date';
+            const card = document.createElement('div');
+            card.className = 'pm-card pm-card-disabled';
+            card.innerHTML = `
+                <div class="pm-card-info">
+                    <h3>
+                        ${this._escHtml(disabled.name || 'Unnamed Plugin')}
+                        <span class="pm-badge">Disabled</span>
+                    </h3>
+                    <p>Disabled on ${this._escHtml(disabledDate)}. Re-enable to reinstall in the official Plugins panel.</p>
+                    ${disabled.sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(disabled.sourceRepo)}" target="_blank" rel="noopener noreferrer">${this._escHtml(disabled.sourceRepo)}</a></p>` : ''}
+                </div>
+                <div class="pm-card-actions"></div>
+            `;
+
+            const actionsContainer = card.querySelector('.pm-card-actions');
+            const enableBtn = document.createElement('button');
+            enableBtn.className = 'pm-btn pm-btn-enable';
+            enableBtn.title = 'Disabled plugin — click to enable (reinstall)';
+            enableBtn.setAttribute('aria-label', 'Disabled plugin. Click to enable and reinstall');
+            enableBtn.innerHTML = '<span class="pm-state-icon" aria-hidden="true">●</span>';
+            actionsContainer.appendChild(enableBtn);
+
+            enableBtn.addEventListener('click', () => this._enableDisabledPlugin(disabled, panelContainer, enableBtn));
+            container.appendChild(card);
+        });
+    }
+
+    renderPluginList(panelContainer, containerId, plugins, typeFilter) {
         const container = panelContainer.querySelector(`#${containerId}`);
         container.innerHTML = '';
 
-        if (plugins.length === 0) {
+        if (plugins.length === 0 && this._getDisabledPluginsForType(typeFilter).length === 0) {
             container.innerHTML = '<div class="pm-card"><div class="pm-card-info"><p>No items found.</p></div></div>';
             return;
         }
@@ -780,8 +887,24 @@ class Plugin extends AppPlugin {
                 }
             });
 
+            // Add Disable button (GitHub-linked plugins only)
+            const disableBtn = document.createElement('button');
+            disableBtn.className = 'pm-btn pm-btn-disable';
+            disableBtn.title = sourceRepo ? 'Enabled plugin — click to disable (remove from Plugins panel)' : 'Link this plugin to GitHub first to enable disable/re-enable';
+            disableBtn.setAttribute('aria-label', sourceRepo ? 'Enabled plugin. Click to disable and remove from Plugins panel' : 'Disable unavailable until this plugin is linked to GitHub');
+            disableBtn.innerHTML = '<span class="pm-state-icon" aria-hidden="true">●</span>';
+            disableBtn.disabled = !sourceRepo;
+            actionsContainer.appendChild(disableBtn);
+
+            disableBtn.addEventListener('click', async () => {
+                if (!sourceRepo) return;
+                await this._disablePlugin(p, conf, panelContainer);
+            });
+
             container.appendChild(card);
         });
+
+        this._renderDisabledPluginCards(panelContainer, container, typeFilter);
     }
 
 
