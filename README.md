@@ -1,11 +1,11 @@
 # Thymer Plugins Manager
 
-A powerful utility plugin for Thymer that allows you to install, manage, update, import, and export your Global Plugins and Collection Plugins from a single unified interface.
+A powerful utility plugin for Thymer that allows you to install, manage, update, import, and export your Plugins and Collection Plugins from a single unified interface.
 
 ## Features
 
 ### Plugin Management
-- **Centralized Dashboard**: View all installed Global Plugins and Collection Plugins in a clean, tabbed interface.
+- **Centralized Dashboard**: View all installed Plugins and Collection Plugins in a clean, tabbed interface.
 - **One-Click Install**: Install plugins by pasting a GitHub repository URL. Supports standard repos, subdirectories, SDK examples, and non-standard file naming conventions.
 - **Smart File Discovery**: Automatically detects `plugin.json`, `plugin.js`, and CSS files — even when using custom filenames, extensionless Thymer exports, or nested folder structures.
 - **Automated Update Checks**: Background update checking (daily) with rate-limit-aware GitHub API polling. Displays a badge when newer versions are available.
@@ -46,7 +46,7 @@ Since this plugin manages other plugins, it must be installed manually first.
 
 After initial manual install, link the PluginsManager to its GitHub repo for future updates:
 
-1. Open Plugins Manager → **Global Plugins** tab.
+1. Open Plugins Manager → ** Plugins** tab.
 2. Click the 🔗 link icon on the Plugins Manager card.
 3. Enter: `https://github.com/ahpatel/thymer-plugins-manager`
 4. The update button (↻) will appear — click it to pull the latest version.
@@ -59,8 +59,8 @@ Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
 
 | Tab | Purpose |
 |-----|---------|
-| **Global Plugins** | Manage workspace-level app plugins. Install, update, delete, import, export. |
-| **Collections** | Manage collection-specific plugins. Same actions as Global Plugins. |
+| **Plugins** | Manage workspace-level app plugins. Install, update, delete, import, export. |
+| **Collections** | Manage collection-specific plugins. Same actions as Plugins. |
 | **Themes** | Manage your Theme Library. Save themes from GitHub URLs or manual paste, and export a combined CSS block. |
 | **Discover** | Browse community plugins and themes. Search, filter, install, or preview. |
 | **Settings** | Configure GitHub PAT, community repo URLs, and auto-export preferences. |
