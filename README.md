@@ -50,7 +50,7 @@ Since this plugin manages other plugins, it must be installed manually first.
 
 After initial manual install, link the PluginsManager to its GitHub repo for future updates:
 
-1. Open Plugins Manager → ** Plugins** tab.
+1. Open Plugins Manager → **Plugins** tab.
 2. Click the 🔗 link icon on the Plugins Manager card.
 3. Enter: `https://github.com/ahpatel/thymer-plugins-manager`
 4. The update button (↻) will appear — click it to pull the latest version.
@@ -62,7 +62,7 @@ Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
 ### Tabs
 
 | Tab | Purpose |
-|-----|---------|
+| ----- | --------- |
 | **Plugins** | Manage workspace-level app plugins. Install, update, delete, import, export. |
 | **Collections** | Manage collection-specific plugins. Same actions as Plugins. |
 | **Themes** | Manage your Theme Library. Save themes from GitHub URLs or manual paste, and export a combined CSS block. |
