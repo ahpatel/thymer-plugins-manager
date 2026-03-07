@@ -1,7 +1,11 @@
 class Plugin extends AppPlugin {
 
     onLoad() {
+        // We load PAT into memory only, removing from cleartext localstorage if found
         this.githubPat = localStorage.getItem('pm_github_pat') || '';
+        if (this.githubPat) {
+            localStorage.removeItem('pm_github_pat');
+        }
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
         this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}');
@@ -96,27 +100,34 @@ class Plugin extends AppPlugin {
             const allGlobals = await this.data.getAllGlobalPlugins();
             const allCollections = await this.data.getAllCollections();
             const allPlugins = [...allGlobals, ...allCollections];
+            let checkCount = 0;
+            const MAX_CHECKS = 50; // Cap to avoid massive rate limits in one run
 
             for (const p of allPlugins) {
+                if (checkCount >= MAX_CHECKS) break;
+                
                 try {
                     const { json } = p.getExistingCodeAndConfig();
                     const repo = json.__source_repo;
-                    if (repo) {
+                    if (repo && this._isValidGithubUrl(repo)) {
+                        checkCount++;
                         const { json: remoteJson } = await this.fetchGithubRepo(repo, { sourceFiles: json.__source_files });
                         if (remoteJson.version && remoteJson.version !== json.version) {
                             updatesAvailable[p.getGuid()] = remoteJson.version;
                         }
+                        // Avoid GitHub rate limiting between requests
+                        await new Promise(r => setTimeout(r, 1000));
                     }
                 } catch (e) {
                     // Bail early if rate-limited
                     if (e.message && (e.message.includes('rate limit') || e.message.includes('403'))) {
                         console.warn('[Plugins Manager] GitHub rate limit hit during background check, stopping early.');
+                        // Add exponential backoff style delay to prevent immediate retries from locking up further
+                        localStorage.setItem('pm_last_update_check', (Date.now() + 6 * 60 * 60 * 1000).toString()); // push next check 6 hrs out
                         break;
                     }
                     /* ignore individual plugin errors */
                 }
-                // Avoid GitHub rate limiting between requests
-                await new Promise(r => setTimeout(r, 750));
             }
 
             localStorage.setItem('pm_updates_available', JSON.stringify(updatesAvailable));
@@ -192,7 +203,7 @@ class Plugin extends AppPlugin {
                                 <p style="font-size: 13px; color: var(--text-color-secondary, #999); margin-bottom: 10px;">
                                     Provide a PAT to increase API rate limits when updating/importing many plugins.
                                 </p>
-                                <input type="password" id="pm-pat-input" class="pm-input" placeholder="ghp_xxxxxxxxxxxx" value="${this.githubPat}" autocomplete="off">
+                                <input type="password" id="pm-pat-input" class="pm-input" placeholder="ghp_xxxxxxxxxxxx" value="${this._escHtml(this.githubPat)}" autocomplete="off">
                             </div>
                             
                             <div class="pm-input-group" style="margin-top: 20px;">
@@ -200,7 +211,7 @@ class Plugin extends AppPlugin {
                                 <p style="font-size: 13px; color: var(--text-color-secondary, #999); margin-bottom: 10px;">
                                     List of raw Markdown URLs (one per line) to discover community plugins and themes.
                                 </p>
-                                <textarea id="pm-repos-input" class="pm-textarea" style="min-height: 80px;" placeholder="https://raw.githubusercontent.com/.../README.md">${this.communityRepos}</textarea>
+                                <textarea id="pm-repos-input" class="pm-textarea" style="min-height: 80px;" placeholder="https://raw.githubusercontent.com/.../README.md">${this._escHtml(this.communityRepos)}</textarea>
                             </div>
 
                             <div class="pm-input-group" style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--pm-border-default);">
@@ -278,7 +289,13 @@ class Plugin extends AppPlugin {
             this.communityRepos = repos;
             localStorage.setItem('pm_community_repos', repos);
             this.githubPat = pat;
-            localStorage.setItem('pm_github_pat', pat);
+            
+            // To improve security, we do not store PAT in cleartext localStorage anymore.
+            // It will only persist in memory for this session unless the user saves it in a secure vault.
+            // (For now, we just don't persist it, requiring re-entry on reload if needed).
+            if (localStorage.getItem('pm_github_pat')) {
+                localStorage.removeItem('pm_github_pat');
+            }
 
             const autoExport = container.querySelector('#pm-auto-export-toggle').checked;
             this._autoExportEnabled = autoExport;
@@ -375,6 +392,23 @@ class Plugin extends AppPlugin {
                         console.warn('[Plugins Manager] Skipping non-HTTPS community repo:', repoUrl);
                         continue;
                     }
+
+                    // Pre-flight check to ensure we aren't fetching a massive file
+                    const headRes = await fetch(repoUrl, { method: 'HEAD' });
+                    if (!headRes.ok) continue;
+
+                    const contentType = headRes.headers.get('content-type') || '';
+                    if (contentType && !contentType.includes('text/plain') && !contentType.includes('text/markdown')) {
+                        console.warn('[Plugins Manager] Skipping repo with invalid content-type:', repoUrl);
+                        continue;
+                    }
+
+                    const contentLength = headRes.headers.get('content-length');
+                    if (contentLength && parseInt(contentLength) > 10 * 1024 * 1024) { // 10MB limit
+                        console.warn('[Plugins Manager] Skipping repo that is too large:', repoUrl);
+                        continue;
+                    }
+
                     const res = await fetch(repoUrl);
                     if (!res.ok) continue;
                     const text = await res.text();
