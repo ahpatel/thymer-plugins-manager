@@ -144,7 +144,7 @@ class Plugin extends AppPlugin {
                 </div>
                 
                 <div class="pm-tabs">
-                    <div class="pm-tab active" data-tab="global" title="Global Plugins"><span class="pm-tab-icon">🔌</span><span class="pm-tab-label">Global Plugins</span></div>
+                    <div class="pm-tab active" data-tab="global" title="Plugins"><span class="pm-tab-icon">🔌</span><span class="pm-tab-label">Plugins</span></div>
                     <div class="pm-tab" data-tab="collections" title="Collections"><span class="pm-tab-icon">📁</span><span class="pm-tab-label">Collections</span></div>
                     <div class="pm-tab" data-tab="themes" title="Themes"><span class="pm-tab-icon">🎨</span><span class="pm-tab-label">Themes</span></div>
                     <div class="pm-tab" data-tab="discover" title="Discover"><span class="pm-tab-icon">🔍</span><span class="pm-tab-label">Discover</span></div>
