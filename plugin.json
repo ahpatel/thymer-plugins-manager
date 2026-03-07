@@ -1,9 +1,9 @@
 {
     "ver": 1,
-    "type": "app",
+    "type": "plugin",
     "name": "Plugins Manager",
     "icon": "box",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "__source_repo": "https://github.com/ahpatel/thymer-plugins-manager",
     "description": "Install, update, import and export Thymer plugins from GitHub or local files.",
     "permissions": [
