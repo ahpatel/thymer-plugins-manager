@@ -5,6 +5,7 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 ## Features
 
 ### Plugin Management
+
 - **Centralized Dashboard**: View all installed Plugins and Collection Plugins in a clean, tabbed interface.
 - **One-Click Install**: Install plugins by pasting a GitHub repository URL. Supports standard repos, subdirectories, SDK examples, and non-standard file naming conventions.
 - **Smart File Discovery**: Automatically detects `plugin.json`, `plugin.js`, and CSS files — even when using custom filenames, extensionless Thymer exports, or nested folder structures.
@@ -13,12 +14,14 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 - **Link Local Plugins**: Associate locally-installed plugins with a GitHub repo to enable update tracking.
 
 ### Discover Tab
+
 - **Community Plugin Browser**: Discover plugins and themes from configurable community repository README files.
 - **Search & Filter**: Filter by name, description, or category. Filter chips for App Plugins, Collections, and Themes.
 - **Theme Preview & Save**: Preview theme screenshots directly from the plugin's README, and save themes directly to your local Theme Library.
 - **Incompatible Plugin Handling**: Plugins that fail to install are automatically added to an exception list (persisted in localStorage with 30-day TTL). Greyed-out Install buttons with a manual "Recheck" option to test for newer, compatible versions.
 
 ### Import & Export
+
 - **Bulk Import**: Import multiple plugins via a list of GitHub URLs or a JSON backup file. Per-plugin duplicate resolution — skipping one plugin doesn't cancel the rest.
 - **Full Override Restore**: When importing a JSON backup, optionally check "Full Override" to cleanly delete any currently installed plugins not present in the backup, restoring the exact configuration state.
 - **Full Backup Export**: Download a complete JSON backup containing all plugin configuration and code, or export a simple URL list. Export filenames automatically include the workspace subdomain and timestamp.
@@ -26,6 +29,7 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 - **Theme Library**: A dedicated tab to manage your saved themes. Add themes via GitHub URL (with smart CSS detection) or manual paste. Combine and export all saved themes into a single CSS file.
 
 ### Security & Reliability
+
 - **XSS Prevention**: All user-controlled strings are HTML-escaped before DOM injection.
 - **JS Validation**: Pre-save validation catches ES module syntax and syntax errors before they can crash Thymer's runtime.
 - **Input Validation**: GitHub URL validation, HTTPS-only image rendering, and `rel="noopener noreferrer"` on all external links.
