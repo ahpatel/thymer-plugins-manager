@@ -58,6 +58,18 @@ class Plugin extends AppPlugin {
             }
         });
 
+        // Add a command palette command to launch it
+        this.ui.addCommandPaletteCommand({
+            label: "Open Plugins Manager",
+            icon: "box",
+            onSelected: async () => {
+                const newPanel = await this.ui.createPanel();
+                if (newPanel) {
+                    newPanel.navigateToCustomType("plugin-manager-panel");
+                }
+            }
+        });
+
         // Start automated update checker
         this.startAutomatedUpdateChecker();
     }
