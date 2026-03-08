@@ -2185,8 +2185,10 @@ class Plugin extends AppPlugin {
                 }
             }
 
-            await targetPlugin.saveConfiguration(schemaConf);
+            console.error(`[PM v1.3.2] importing "${sanitizedConf.name}": fields=${schemaConf.fields?.length}, item_name=${schemaConf.item_name}`);
             await targetPlugin.saveCode(jsCode);
+            const cfgResult = await targetPlugin.saveConfiguration(schemaConf);
+            console.error(`[PM v1.3.2] saveConfiguration result for "${sanitizedConf.name}":`, cfgResult, 'post-conf fields:', targetPlugin.getConfiguration()?.fields?.length);
         } else {
             await targetPlugin.savePlugin(sanitizedConf, jsCode);
         }
