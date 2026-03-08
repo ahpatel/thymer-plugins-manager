@@ -204,7 +204,7 @@ class Plugin extends AppPlugin {
 
                 <div class="pm-tab-content active" id="tab-global">
                     <div class="pm-tab-actions">
-                        <button class="pm-btn primary" id="pm-install-global-btn">Install Global Plugin</button>
+                        <button class="pm-btn primary" id="pm-install-global-btn">Install Plugin</button>
                         <button class="pm-btn" id="pm-import-global-btn">Import Plugins</button>
                         <button class="pm-btn" id="pm-export-global-btn">Export Plugins</button>
                         <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for updates"><span style="font-family: 'tabler-icons';">↻</span></button>
@@ -1471,7 +1471,7 @@ class Plugin extends AppPlugin {
         const globalsData = allGlobals.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
-                return { name: json.name, type: json.type || 'app', version: json.version, source_repo: json.__source_repo, code, json };
+                return { name: json.name, type: 'plugin', version: json.version, source_repo: json.__source_repo, code, json };
             } catch (e) { return null; }
         });
 
@@ -2055,7 +2055,7 @@ class Plugin extends AppPlugin {
     // --- Core Features ---
 
     async showInstallDialog(container, typeFilter) {
-        const url = prompt(`Enter GitHub URL for the ${typeFilter === 'app' ? 'Global Plugin' : 'Collection Plugin'} (e.g. https://github.com/user/repo):`);
+        const url = prompt(`Enter GitHub URL for the ${typeFilter === 'app' ? 'Plugin' : 'Collection Plugin'} (e.g. https://github.com/user/repo):`);
         if (!url) return;
 
         try {
@@ -2073,7 +2073,7 @@ class Plugin extends AppPlugin {
             const filterIsGlobal = typeFilter === 'app';
 
             if (isGlobal !== filterIsGlobal) {
-                if (!confirm(`Warning: This repository appears to be a ${isGlobal ? 'Global Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Global Plugin' : 'Collection Plugin'}. Continue anyway?`)) {
+                if (!confirm(`Warning: This repository appears to be a ${isGlobal ? 'Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Plugin' : 'Collection Plugin'}. Continue anyway?`)) {
                     return;
                 }
             }
@@ -2134,7 +2134,7 @@ class Plugin extends AppPlugin {
                 if (!interactive) {
                     pType = 'app'; // Default in non-interactive contexts
                 } else {
-                    const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Global Plugin, or Cancel for Collection Plugin.`);
+                    const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Plugin, or Cancel for Collection Plugin.`);
                     pType = choice ? 'app' : 'collection';
                 }
             }
@@ -2353,7 +2353,7 @@ class Plugin extends AppPlugin {
         const overlayHtml = `
             <div id="pm-import-modal" class="pm-modal">
                 <div class="pm-modal-content">
-                    <h3>Import ${typeFilter === 'app' ? 'Global Plugins' : 'Collection Plugins'}</h3>
+                    <h3>Import ${typeFilter === 'app' ? 'Plugins' : 'Collection Plugins'}</h3>
                     <p>Paste GitHub URLs (one per line), paste a JSON export array, or upload a JSON backup file.</p>
                     <textarea id="pm-import-textarea" class="pm-textarea" placeholder="https://github.com/user/repo1\nhttps://github.com/user/repo2"></textarea>
                     
@@ -2403,7 +2403,7 @@ class Plugin extends AppPlugin {
 
             const isFullOverride = document.getElementById('pm-import-full-override').checked;
             if (isFullOverride) {
-                if (!confirm(`WARNING: Full Override will delete existing ${typeFilter === 'app' ? 'Global Plugins' : 'Collections'} that are NOT in this backup. This cannot be undone. Are you sure?`)) {
+                if (!confirm(`WARNING: Full Override will delete existing ${typeFilter === 'app' ? 'Plugins' : 'Collections'} that are NOT in this backup. This cannot be undone. Are you sure?`)) {
                     return;
                 }
             }
@@ -2633,7 +2633,7 @@ class Plugin extends AppPlugin {
             candidateData = allData;
         }
 
-        const typeLabel = typeFilter === 'app' ? 'Global Plugins' : 'Collection Plugins';
+        const typeLabel = typeFilter === 'app' ? 'Plugins' : 'Collection Plugins';
 
         // Build the selection list HTML
         const selectionRows = candidateData.map((d, i) => `
