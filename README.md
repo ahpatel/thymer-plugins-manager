@@ -50,7 +50,7 @@ Since this plugin manages other plugins, it must be installed manually first.
 
 ### Self-Update
 
-After initial manual install, link the PluginsManager to its GitHub repo for future updates:
+After initial manual install, the PluginsManager will get future updates from its GitHub repo.  If the repo needs to be reset, you can manually enter the URL following these steps:
 
 1. Open Plugins Manager → **Plugins** tab.
 2. Click the 🔗 link icon on the Plugins Manager card.
@@ -59,7 +59,7 @@ After initial manual install, link the PluginsManager to its GitHub repo for fut
 
 ## Usage
 
-Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
+Click the **Plugins Manager** icon in your left statusbar or from the Command Palette (Cmd+P) to open the dashboard.
 
 ### Tabs
 
@@ -73,7 +73,7 @@ Click the **Plugins Manager** icon in your left sidebar to open the dashboard.
 
 ### Settings
 
-- **GitHub PAT** (Optional): Provide a Personal Access Token to increase API rate limits when managing many plugins.
+- **GitHub PAT** (Optional): Provide a Personal Access Token to increase API rate limits when managing many plugins or allow you to pull from your private repos.
 - **Community Repositories**: List of raw Markdown URLs pointing to community plugin/theme directories.
 - **Auto-Export**: Toggle automatic backup on every plugin change. Choose a local directory using the browser's directory picker.
 
