@@ -2177,6 +2177,13 @@ class Plugin extends AppPlugin {
                 // even if sanitizedConf.fields is empty (which would mean the source had no fields).
                 const schemaConf = { ...sanitizedConf };
 
+                console.log(`[Plugins Manager] DEBUG importing collection "${sanitizedConf.name}":`, {
+                    freshTargetFound: freshTarget !== targetPlugin,
+                    schemaConfFields: schemaConf.fields ? schemaConf.fields.length : 'undefined',
+                    schemaConfKeys: Object.keys(schemaConf),
+                    schemaConf: JSON.stringify(schemaConf).substring(0, 500),
+                });
+
                 // Remap filter_colguid for link-to-record fields: the exported GUID is from the
                 // source workspace; resolve using the annotated filter_colname in the target workspace
                 if (Array.isArray(schemaConf.fields) && schemaConf.fields.length > 0) {
@@ -2201,7 +2208,14 @@ class Plugin extends AppPlugin {
                     }
                 }
 
-                await freshTarget.saveConfiguration(schemaConf);
+                const saveResult = await freshTarget.saveConfiguration(schemaConf);
+                console.log(`[Plugins Manager] DEBUG saveConfiguration result for "${sanitizedConf.name}":`, saveResult);
+                const verifyConf = freshTarget.getConfiguration ? freshTarget.getConfiguration() : null;
+                console.log(`[Plugins Manager] DEBUG post-save getConfiguration for "${sanitizedConf.name}":`, {
+                    fieldsCount: verifyConf && verifyConf.fields ? verifyConf.fields.length : 'N/A',
+                    item_name: verifyConf && verifyConf.item_name,
+                    page_field_ids: verifyConf && verifyConf.page_field_ids,
+                });
             } catch (e) {
                 console.warn(`[Plugins Manager] saveConfiguration for collection "${jsonConf.name}" failed:`, e);
             }
