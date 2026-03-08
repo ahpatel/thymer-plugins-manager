@@ -7,3 +7,4 @@ cache
 icons.txt
 package.json
 package-lock.json
+thymer-backup-*

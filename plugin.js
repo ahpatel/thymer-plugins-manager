@@ -318,9 +318,7 @@ class Plugin extends AppPlugin {
                 this.loadDiscoverPlugins(container);
             }
 
-            if (tabId === 'global') this._renderGlobalList(container);
-            else if (tabId === 'collections') this._renderCollectionsList(container);
-            else if (tabId === 'discover') this._renderDiscoverList(container);
+            if (tabId === 'global' || tabId === 'collections') this.loadPlugins(container);
             else if (tabId === 'themes') this._renderThemesList(container);
         });
 
@@ -2109,36 +2107,42 @@ class Plugin extends AppPlugin {
 
         let targetPlugin = null;
 
+        // Determine the type early so we know how to handle existing plugins
+        let pType = jsonConf.type;
+        if (!pType) {
+            if (/extends\s+AppPlugin/.test(jsCode)) {
+                pType = "app";
+            } else if (/extends\s+(CollectionPlugin|JournalCorePlugin)/.test(jsCode)) {
+                pType = "collection";
+            }
+        }
+        if (!pType || (pType !== 'app' && pType !== 'global' && pType !== 'collection')) {
+            if (!interactive) {
+                pType = 'app';
+            } else {
+                const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Plugin, or Cancel for Collection Plugin.`);
+                pType = choice ? 'app' : 'collection';
+            }
+        }
+
         if (existingPlugin) {
             if (!interactive || confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
-                targetPlugin = existingPlugin;
+                if (pType === 'collection') {
+                    // For collections: trash and recreate so that fields/views/item_name are applied
+                    // cleanly via savePlugin on a fresh instance (Thymer may not update schema on
+                    // existing collections via savePlugin/saveConfiguration).
+                    await existingPlugin.trashPlugin();
+                    targetPlugin = await this.data.createCollection();
+                    if (!targetPlugin) throw new Error("Failed to recreate collection container.");
+                } else {
+                    targetPlugin = existingPlugin;
+                }
             } else {
                 return 'skipped';
             }
         }
 
         if (!targetPlugin) {
-            // Attempt to derive the type if it's missing in plugin.json
-            let pType = jsonConf.type;
-            if (!pType) {
-                // Check for class extension patterns (handles various whitespace/formatting)
-                if (/extends\s+AppPlugin/.test(jsCode)) {
-                    pType = "app";
-                } else if (/extends\s+(CollectionPlugin|JournalCorePlugin)/.test(jsCode)) {
-                    pType = "collection";
-                }
-            }
-
-            // If still unknown, ask the user
-            if (!pType || (pType !== 'app' && pType !== 'global' && pType !== 'collection')) {
-                if (!interactive) {
-                    pType = 'app'; // Default in non-interactive contexts
-                } else {
-                    const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Plugin, or Cancel for Collection Plugin.`);
-                    pType = choice ? 'app' : 'collection';
-                }
-            }
-
             if (pType === 'app' || pType === 'global') {
                 targetPlugin = await this.data.createGlobalPlugin();
             } else if (pType === 'collection') {
