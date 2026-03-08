@@ -2154,44 +2154,32 @@ class Plugin extends AppPlugin {
             throw new Error(`"${jsonConf.name || 'Unknown'}" code exceeds the 500KB size limit.`);
         }
 
+        // For collections: remap filter_colguid for link-to-record fields before saving
         const pTypeNorm = (jsonConf.type || '').toLowerCase();
-        if (pTypeNorm === 'collection') {
-            // For collections: build schema conf and remap filter_colguid before saving.
-            // Use saveConfiguration (schema) + saveCode (code) separately rather than savePlugin,
-            // to avoid the immediate plugin reload from savePlugin racing with/overwriting the schema.
-            const allCollections = await this.data.getAllCollections();
-            const schemaConf = { ...sanitizedConf };
-
-            // Remap filter_colguid for link-to-record fields
-            if (Array.isArray(schemaConf.fields) && schemaConf.fields.length > 0) {
-                const hasColNames = schemaConf.fields.some(f => f.filter_colname);
-                if (hasColNames) {
-                    const nameToGuid = {};
-                    for (const tc of allCollections) {
-                        try {
-                            const tc_conf = tc.getConfiguration();
-                            const tc_guid = tc.getGuid ? tc.getGuid() : null;
-                            if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
-                        } catch (e) { }
-                    }
-                    schemaConf.fields = schemaConf.fields.map(f => {
-                        if (f.filter_colname && nameToGuid[f.filter_colname]) {
-                            const { filter_colname, ...rest } = f;
-                            return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
-                        }
-                        const { filter_colname, ...rest } = f;
-                        return rest;
-                    });
+        if (pTypeNorm === 'collection' && Array.isArray(sanitizedConf.fields) && sanitizedConf.fields.length > 0) {
+            const hasColNames = sanitizedConf.fields.some(f => f.filter_colname);
+            if (hasColNames) {
+                const allCollections = await this.data.getAllCollections();
+                const nameToGuid = {};
+                for (const tc of allCollections) {
+                    try {
+                        const tc_conf = tc.getConfiguration();
+                        const tc_guid = tc.getGuid ? tc.getGuid() : null;
+                        if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
+                    } catch (e) { }
                 }
+                sanitizedConf.fields = sanitizedConf.fields.map(f => {
+                    if (f.filter_colname && nameToGuid[f.filter_colname]) {
+                        const { filter_colname, ...rest } = f;
+                        return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
+                    }
+                    const { filter_colname, ...rest } = f;
+                    return rest;
+                });
             }
-
-            console.error(`[PM v1.3.2] importing "${sanitizedConf.name}": fields=${schemaConf.fields?.length}, item_name=${schemaConf.item_name}`);
-            await targetPlugin.saveCode(jsCode);
-            const cfgResult = await targetPlugin.saveConfiguration(schemaConf);
-            console.error(`[PM v1.3.2] saveConfiguration result for "${sanitizedConf.name}":`, cfgResult, 'post-conf fields:', targetPlugin.getConfiguration()?.fields?.length);
-        } else {
-            await targetPlugin.savePlugin(sanitizedConf, jsCode);
         }
+
+        await targetPlugin.savePlugin(sanitizedConf, jsCode);
 
         // Security: sanitize and save CSS if provided
         if (cssCode) {
@@ -2452,9 +2440,12 @@ class Plugin extends AppPlugin {
                     }
 
                     for (const p of parsed) {
-                        const pName = (p.json && p.json.name) || p.name || 'Unknown';
+                        // Merge wrapper-level type into json conf (export format puts type on wrapper, not inside json)
+                        const mergedJson = { ...p.json };
+                        if (!mergedJson.type && p.type) mergedJson.type = p.type;
+                        const pName = mergedJson.name || p.name || 'Unknown';
                         try {
-                            const result = await this.installPlugin(p.json, p.code, { interactive: !isFullOverride });
+                            const result = await this.installPlugin(mergedJson, p.code, { interactive: !isFullOverride });
                             if (result === 'skipped') { skippedNames.push(pName); }
                             else { successCount++; }
                         } catch (e) {
