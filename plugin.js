@@ -2161,33 +2161,47 @@ class Plugin extends AppPlugin {
 
         await targetPlugin.savePlugin(sanitizedConf, jsCode);
 
-        // For collections: apply the full schema (fields/views/etc.) via saveConfiguration
+        // For collections: apply the full schema (fields/views/etc.) via saveConfiguration.
+        // savePlugin reloads the plugin immediately, so targetPlugin may be a stale object.
+        // Re-fetch the live collection by name before calling saveConfiguration.
         const pTypeNorm = (jsonConf.type || '').toLowerCase();
-        if (pTypeNorm === 'collection' && sanitizedConf.fields) {
+        if (pTypeNorm === 'collection') {
             try {
+                // Re-fetch the live collection object (savePlugin may have replaced the instance)
+                const freshCollections = await this.data.getAllCollections();
+                const freshTarget = freshCollections.find(c => {
+                    try { return c.getConfiguration().name === sanitizedConf.name; } catch(e) { return false; }
+                }) || targetPlugin;
+
+                // Build the config to save: start from sanitizedConf but always include fields/views/etc.
+                // even if sanitizedConf.fields is empty (which would mean the source had no fields).
+                const schemaConf = { ...sanitizedConf };
+
                 // Remap filter_colguid for link-to-record fields: the exported GUID is from the
                 // source workspace; resolve using the annotated filter_colname in the target workspace
-                const hasColNames = sanitizedConf.fields.some(f => f.filter_colname);
-                if (hasColNames) {
-                    const targetCollections = await this.data.getAllCollections();
-                    const nameToGuid = {};
-                    for (const tc of targetCollections) {
-                        try {
-                            const tc_conf = tc.getConfiguration();
-                            const tc_guid = tc.getGuid ? tc.getGuid() : null;
-                            if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
-                        } catch (e) { }
-                    }
-                    sanitizedConf.fields = sanitizedConf.fields.map(f => {
-                        if (f.filter_colname && nameToGuid[f.filter_colname]) {
-                            const { filter_colname, ...rest } = f;
-                            return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
+                if (Array.isArray(schemaConf.fields) && schemaConf.fields.length > 0) {
+                    const hasColNames = schemaConf.fields.some(f => f.filter_colname);
+                    if (hasColNames) {
+                        const nameToGuid = {};
+                        for (const tc of freshCollections) {
+                            try {
+                                const tc_conf = tc.getConfiguration();
+                                const tc_guid = tc.getGuid ? tc.getGuid() : null;
+                                if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
+                            } catch (e) { }
                         }
-                        const { filter_colname, ...rest } = f;
-                        return rest;
-                    });
+                        schemaConf.fields = schemaConf.fields.map(f => {
+                            if (f.filter_colname && nameToGuid[f.filter_colname]) {
+                                const { filter_colname, ...rest } = f;
+                                return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
+                            }
+                            const { filter_colname, ...rest } = f;
+                            return rest;
+                        });
+                    }
                 }
-                await targetPlugin.saveConfiguration(sanitizedConf);
+
+                await freshTarget.saveConfiguration(schemaConf);
             } catch (e) {
                 console.warn(`[Plugins Manager] saveConfiguration for collection "${jsonConf.name}" failed:`, e);
             }
