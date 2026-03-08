@@ -1241,7 +1241,9 @@ class Plugin extends AppPlugin {
             const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = blobUrl;
-            a.download = 'thymer-themes-combined.css';
+            const wsName = this._getWorkspaceName();
+            const ts = this._getBackupTimestamp();
+            a.download = `logseq-backup-themese-${wsName}-${ts}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1367,6 +1369,16 @@ class Plugin extends AppPlugin {
             } catch (e) { return null; }
         });
 
+        // Build a guid->name map for all collections (for filter_colguid annotation)
+        const colGuidToName = {};
+        for (const p of allCollections) {
+            try {
+                const lc = p.getConfiguration();
+                const guid = p.getGuid ? p.getGuid() : null;
+                if (guid && lc && lc.name) colGuidToName[guid] = lc.name;
+            } catch (e) { }
+        }
+
         const collectionsData = allCollections.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
@@ -1377,19 +1389,101 @@ class Plugin extends AppPlugin {
                 try {
                     const liveConfig = p.getConfiguration();
                     if (liveConfig) {
-                        if (liveConfig.properties) mergedJson.properties = liveConfig.properties;
-                        if (liveConfig.views) mergedJson.views = liveConfig.views;
-                        if (liveConfig.name) mergedJson.name = liveConfig.name;
+                        // Merge all live collection schema fields over the static json
+                        const schemaKeys = ['name', 'icon', 'color', 'item_name', 'description',
+                            'show_sidebar_items', 'show_cmdpal_items', 'sidebar_action',
+                            'fields', 'views', 'page_field_ids', 'sidebar_record_sort_field_id',
+                            'sidebar_record_sort_dir', 'managed', 'home', 'related_query'];
+                        for (const k of schemaKeys) {
+                            if (liveConfig[k] !== undefined) mergedJson[k] = liveConfig[k];
+                        }
                     }
                 } catch (configErr) {
                     console.warn(`[Plugins Manager] Failed to get live config for collection ${json.name}:`, configErr);
+                }
+
+                // Annotate link-to-record fields with the target collection name
+                // so the GUID can be remapped when importing into a different workspace
+                if (Array.isArray(mergedJson.fields)) {
+                    mergedJson.fields = mergedJson.fields.map(f => {
+                        if (f.filter_colguid && colGuidToName[f.filter_colguid]) {
+                            return { ...f, filter_colname: colGuidToName[f.filter_colguid] };
+                        }
+                        return f;
+                    });
                 }
 
                 return { name: mergedJson.name, type: 'collection', version: mergedJson.version, source_repo: mergedJson.__source_repo, code, json: mergedJson };
             } catch (e) { return null; }
         });
 
-        return [...globalsData, ...collectionsData].filter(Boolean);
+        const sorted = this._topoSortCollections(collectionsData.filter(Boolean), colGuidToName);
+        return [...globalsData, ...sorted];
+    }
+
+    /**
+     * Topologically sort collection export items so that collections depended upon
+     * (via link-to-record filter_colguid) appear before the collections that reference them.
+     * Falls back to original order for any cycles or unresolvable references.
+     */
+    _topoSortCollections(items, colGuidToName) {
+        // Build name->item index
+        const byName = {};
+        for (const item of items) {
+            if (item && item.name) byName[item.name] = item;
+        }
+
+        // Build adjacency: for each collection, which collection names does it depend on?
+        const deps = {};
+        for (const item of items) {
+            deps[item.name] = new Set();
+            const fields = item.json && item.json.fields;
+            if (Array.isArray(fields)) {
+                for (const f of fields) {
+                    const depName = f.filter_colname || (f.filter_colguid && colGuidToName[f.filter_colguid]);
+                    if (depName && depName !== item.name && byName[depName]) {
+                        deps[item.name].add(depName);
+                    }
+                }
+            }
+        }
+
+        // Kahn's algorithm (BFS topological sort)
+        const inDegree = {};
+        const dependents = {}; // dep -> [items that depend on it]
+        for (const item of items) {
+            inDegree[item.name] = inDegree[item.name] || 0;
+            dependents[item.name] = dependents[item.name] || [];
+        }
+        for (const item of items) {
+            for (const dep of deps[item.name]) {
+                inDegree[item.name] = (inDegree[item.name] || 0) + 1;
+                dependents[dep] = dependents[dep] || [];
+                dependents[dep].push(item.name);
+            }
+        }
+
+        const queue = items.filter(item => (inDegree[item.name] || 0) === 0).map(i => i.name);
+        const result = [];
+        const visited = new Set();
+
+        while (queue.length > 0) {
+            const name = queue.shift();
+            if (visited.has(name)) continue;
+            visited.add(name);
+            if (byName[name]) result.push(byName[name]);
+            for (const dependent of (dependents[name] || [])) {
+                inDegree[dependent] = (inDegree[dependent] || 1) - 1;
+                if (inDegree[dependent] === 0) queue.push(dependent);
+            }
+        }
+
+        // Append any remaining items not reached (cycles or isolated)
+        for (const item of items) {
+            if (!visited.has(item.name)) result.push(item);
+        }
+
+        return result;
     }
 
     /** Get the current workspace name from the hostname */
@@ -1403,6 +1497,24 @@ class Plugin extends AppPlugin {
             }
         } catch (e) { }
         return 'workspace';
+    }
+
+    _getBackupTimestamp() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    }
+
+    _getBackupJsonFilename(section) {
+        const wsName = this._getWorkspaceName();
+        const ts = this._getBackupTimestamp();
+        if (section === 'collection') {
+            return `thymer-backup-collections-${wsName}-${ts}.json`;
+        }
+        if (section === 'theme') {
+            return `logseq-backup-themese-${wsName}-${ts}.json`;
+        }
+        return `thymer-backup-plugins-${wsName}-${ts}.json`;
     }
 
     /** Auto-export full backup to chosen directory */
@@ -1421,11 +1533,7 @@ class Plugin extends AppPlugin {
             }
             const data = await this._getExportData();
             const jsonStr = JSON.stringify(data, null, 2);
-            const now = new Date();
-            const pad = (n) => String(n).padStart(2, '0');
-            const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-            const wsName = this._getWorkspaceName();
-            const filename = `thymer-plugins-backup-${wsName}-${ts}.json`;
+            const filename = this._getBackupJsonFilename('app');
             const fileHandle = await this._autoExportDirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(jsonStr);
@@ -1489,10 +1597,21 @@ class Plugin extends AppPlugin {
     /** Security: Whitelist allowed plugin.json config keys and enforce size limits */
     _sanitizePluginConfig(jsonConf) {
         const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions', '__source_repo', '__source_files', 'ver'];
+        const COLLECTION_SCHEMA_KEYS = ['color', 'item_name', 'show_sidebar_items', 'show_cmdpal_items',
+            'sidebar_action', 'fields', 'views', 'page_field_ids', 'sidebar_record_sort_field_id',
+            'sidebar_record_sort_dir', 'managed', 'home', 'related_query', 'default_banner'];
         const sanitized = {};
         for (const key of ALLOWED_KEYS) {
             if (jsonConf[key] !== undefined) {
                 sanitized[key] = jsonConf[key];
+            }
+        }
+        const isCollection = (jsonConf.type || '').toLowerCase() === 'collection';
+        if (isCollection) {
+            for (const key of COLLECTION_SCHEMA_KEYS) {
+                if (jsonConf[key] !== undefined) {
+                    sanitized[key] = jsonConf[key];
+                }
             }
         }
         return sanitized;
@@ -1936,6 +2055,38 @@ class Plugin extends AppPlugin {
 
         await targetPlugin.savePlugin(sanitizedConf, jsCode);
 
+        // For collections: apply the full schema (fields/views/etc.) via saveConfiguration
+        const pTypeNorm = (jsonConf.type || '').toLowerCase();
+        if (pTypeNorm === 'collection' && sanitizedConf.fields) {
+            try {
+                // Remap filter_colguid for link-to-record fields: the exported GUID is from the
+                // source workspace; resolve using the annotated filter_colname in the target workspace
+                const hasColNames = sanitizedConf.fields.some(f => f.filter_colname);
+                if (hasColNames) {
+                    const targetCollections = await this.data.getAllCollections();
+                    const nameToGuid = {};
+                    for (const tc of targetCollections) {
+                        try {
+                            const tc_conf = tc.getConfiguration();
+                            const tc_guid = tc.getGuid ? tc.getGuid() : null;
+                            if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
+                        } catch (e) { }
+                    }
+                    sanitizedConf.fields = sanitizedConf.fields.map(f => {
+                        if (f.filter_colname && nameToGuid[f.filter_colname]) {
+                            const { filter_colname, ...rest } = f;
+                            return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
+                        }
+                        const { filter_colname, ...rest } = f;
+                        return rest;
+                    });
+                }
+                await targetPlugin.saveConfiguration(sanitizedConf);
+            } catch (e) {
+                console.warn(`[Plugins Manager] saveConfiguration for collection "${jsonConf.name}" failed:`, e);
+            }
+        }
+
         // Security: sanitize and save CSS if provided
         if (cssCode) {
             const sanitizedCSS = this._sanitizeCSS(cssCode);
@@ -2295,11 +2446,7 @@ class Plugin extends AppPlugin {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            const now = new Date();
-            const pad = (n) => String(n).padStart(2, '0');
-            const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-            const wsName = this._getWorkspaceName();
-            a.download = `thymer-plugins-backup-${wsName}-${ts}.json`;
+            a.download = this._getBackupJsonFilename(typeFilter);
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
