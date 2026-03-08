@@ -1,9 +1,10 @@
 class Plugin extends AppPlugin {
 
     onLoad() {
-        // We load PAT into memory only, removing from cleartext localstorage if found
-        this.githubPat = localStorage.getItem('pm_github_pat') || '';
-        if (this.githubPat) {
+        // We load PAT from plugin configuration, removing from cleartext localstorage if found
+        const conf = this.getConfiguration();
+        this.githubPat = conf?.custom?.githubPat || localStorage.getItem('pm_github_pat_persistent') || localStorage.getItem('pm_github_pat') || '';
+        if (localStorage.getItem('pm_github_pat')) {
             localStorage.removeItem('pm_github_pat');
         }
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
@@ -17,7 +18,6 @@ class Plugin extends AppPlugin {
                 delete this._incompatiblePlugins[k];
         });
         localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
-        const conf = this.getConfiguration();
         let savedThemes = conf?.custom?.saved_themes;
 
         if (!savedThemes) {
@@ -333,16 +333,36 @@ class Plugin extends AppPlugin {
         }
 
         // Settings
-        container.querySelector('#pm-save-settings').addEventListener('click', () => {
+        container.querySelector('#pm-save-settings').addEventListener('click', async () => {
             const pat = container.querySelector('#pm-pat-input').value.trim();
             const repos = container.querySelector('#pm-repos-input').value.trim();
             this.communityRepos = repos;
             localStorage.setItem('pm_community_repos', repos);
             this.githubPat = pat;
             
-            // To improve security, we do not store PAT in cleartext localStorage anymore.
-            // It will only persist in memory for this session unless the user saves it in a secure vault.
-            // (For now, we just don't persist it, requiring re-entry on reload if needed).
+            // To improve security, we save PAT in the plugin configuration
+            const conf = this.getConfiguration();
+            if (!conf.custom) conf.custom = {};
+            conf.custom.githubPat = pat;
+            
+            // Backup to localstorage in case plugin API fails to save
+            if (pat) {
+                localStorage.setItem('pm_github_pat_persistent', pat);
+            } else {
+                localStorage.removeItem('pm_github_pat_persistent');
+            }
+            
+            try {
+                const plugin = this.data.getPluginByGuid(this.getGuid());
+                if (plugin) {
+                    await plugin.saveConfiguration(conf);
+                } else if (typeof this.saveConfiguration === 'function') {
+                    await this.saveConfiguration(conf);
+                }
+            } catch (e) {
+                console.warn('[Plugins Manager] Failed to save PAT to config:', e);
+            }
+
             if (localStorage.getItem('pm_github_pat')) {
                 localStorage.removeItem('pm_github_pat');
             }
@@ -1423,7 +1443,22 @@ class Plugin extends AppPlugin {
         const collectionsData = allCollections.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
-                return { name: json.name, type: 'collection', version: json.version, source_repo: json.__source_repo, code, json };
+                
+                // Get the live configuration (which includes dynamically added properties and views)
+                // and merge it with the base JSON from the file.
+                let mergedJson = { ...json };
+                try {
+                    const liveConfig = p.getConfiguration();
+                    if (liveConfig) {
+                        if (liveConfig.properties) mergedJson.properties = liveConfig.properties;
+                        if (liveConfig.views) mergedJson.views = liveConfig.views;
+                        if (liveConfig.name) mergedJson.name = liveConfig.name;
+                    }
+                } catch (configErr) {
+                    console.warn(`[Plugins Manager] Failed to get live config for collection ${json.name}:`, configErr);
+                }
+
+                return { name: mergedJson.name, type: 'collection', version: mergedJson.version, source_repo: mergedJson.__source_repo, code, json: mergedJson };
             } catch (e) { return null; }
         });
 
@@ -1585,13 +1620,7 @@ class Plugin extends AppPlugin {
 
     /** Validate that a URL points to github.com over HTTPS */
     _isValidGithubUrl(url) {
-        try {
-            const parsed = new URL(url);
-            return parsed.protocol === 'https:' &&
-                (parsed.hostname === 'github.com' || parsed.hostname === 'www.github.com');
-        } catch (e) {
-            return false;
-        }
+        return /^https:\/\/github\.com\/[^\/]+\/[^\/]+/.test(url);
     }
 
     // --- GitHub Utils ---
@@ -1637,8 +1666,11 @@ class Plugin extends AppPlugin {
      * Falls back through branches (main, master).
      */
     async _listRepoDirectory(owner, repo, subpath) {
-        const apiHeaders = {};
-        if (this.githubPat) apiHeaders['Authorization'] = `token ${this.githubPat}`;
+        const apiHeaders = {
+            'Accept': 'application/vnd.github.v3+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+        };
+        if (this.githubPat) apiHeaders['Authorization'] = `Bearer ${this.githubPat}`;
 
         const path = subpath || '';
         const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
@@ -1703,15 +1735,38 @@ class Plugin extends AppPlugin {
         return null;
     }
 
+    async _fetchGithubFile(owner, repo, branch, path) {
+        // Use API when PAT is available (required for private repos), else raw URL
+        if (this.githubPat) {
+            const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+            const res = await fetch(apiUrl, {
+                headers: {
+                    'Authorization': `Bearer ${this.githubPat}`,
+                    'Accept': 'application/vnd.github.v3.raw'
+                }
+            });
+            if (!res.ok) throw new Error(`Failed to fetch ${path} (${res.status})`);
+            return await res.text();
+        }
+
+        const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
+        const res = await fetch(rawUrl);
+        if (!res.ok) throw new Error(`Failed to fetch ${path} (${res.status})`);
+        return await res.text();
+    }
+
     async fetchGithubRepo(url, { sourceFiles } = {}) {
         if (!this._isValidGithubUrl(url)) throw new Error("URL must point to github.com");
         const { owner, repo, subpath } = this._parseGithubUrl(url);
         if (!owner || !repo) throw new Error("Invalid GitHub URL. Expected format: https://github.com/user/repo");
 
         // PAT auth headers — only for api.github.com, NOT for raw.githubusercontent.com (triggers CORS preflight)
-        const apiHeaders = {};
+        const apiHeaders = {
+            'Accept': 'application/vnd.github.v3+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+        };
         if (this.githubPat) {
-            apiHeaders['Authorization'] = `token ${this.githubPat}`;
+            apiHeaders['Authorization'] = `Bearer ${this.githubPat}`;
         }
 
         const prefix = subpath ? `${subpath}/` : '';
@@ -1726,26 +1781,18 @@ class Plugin extends AppPlugin {
 
         // ----- Strategy 0: Use cached filenames from a previous discovery (fastest — no probing needed) -----
         if (sourceFiles && sourceFiles.branch && sourceFiles.json && sourceFiles.js) {
-            const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${sourceFiles.branch}/${prefix}`;
             try {
-                const jsonRes = await fetch(baseUrl + sourceFiles.json);
-                if (jsonRes.ok) {
-                    const pluginJson = JSON.parse(await jsonRes.text());
-                    const jsRes = await fetch(baseUrl + sourceFiles.js);
-                    if (jsRes.ok) {
-                        const pluginJs = await jsRes.text();
-                        pluginJson.__source_repo = url;
-                        pluginJson.__source_files = buildSourceFiles(sourceFiles.branch, sourceFiles.json, sourceFiles.js, sourceFiles.css);
-                        const result = { json: pluginJson, js: pluginJs };
-                        if (sourceFiles.css) {
-                            try {
-                                const cssRes = await fetch(baseUrl + sourceFiles.css);
-                                if (cssRes.ok) result.css = await cssRes.text();
-                            } catch (e) { /* CSS is optional */ }
-                        }
-                        return result;
-                    }
+                const pluginJson = JSON.parse(await this._fetchGithubFile(owner, repo, sourceFiles.branch, `${prefix}${sourceFiles.json}`));
+                const pluginJs = await this._fetchGithubFile(owner, repo, sourceFiles.branch, `${prefix}${sourceFiles.js}`);
+                pluginJson.__source_repo = url;
+                pluginJson.__source_files = buildSourceFiles(sourceFiles.branch, sourceFiles.json, sourceFiles.js, sourceFiles.css);
+                const result = { json: pluginJson, js: pluginJs };
+                if (sourceFiles.css) {
+                    try {
+                        result.css = await this._fetchGithubFile(owner, repo, sourceFiles.branch, `${prefix}${sourceFiles.css}`);
+                    } catch (e) { /* CSS is optional */ }
                 }
+                return result;
             } catch (e) { /* cached names failed, fall through to full discovery */ }
         }
 
@@ -1758,22 +1805,17 @@ class Plugin extends AppPlugin {
         const jsCandidates = ['plugin.js', `${repo}-plugin.js`, 'Custom Code'];
 
         for (const branch of ['main', 'master']) {
-            const baseUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${prefix}`;
-
             // Try each JSON candidate until one responds OK
             let foundJson = null;
             let foundJsonName = null;
             for (const jsonName of jsonCandidates) {
                 try {
-                    const jsonRes = await fetch(baseUrl + jsonName);
-                    if (jsonRes.ok) {
-                        const text = await jsonRes.text();
-                        try {
-                            foundJson = JSON.parse(text);
-                            foundJsonName = jsonName;
-                            break;
-                        } catch (e) { /* not valid JSON, try next */ }
-                    }
+                    const text = await this._fetchGithubFile(owner, repo, branch, `${prefix}${jsonName}`);
+                    try {
+                        foundJson = JSON.parse(text);
+                        foundJsonName = jsonName;
+                        break;
+                    } catch (e) { /* not valid JSON, try next */ }
                 } catch (e) { /* try next */ }
             }
             if (!foundJson) continue;
@@ -1781,30 +1823,24 @@ class Plugin extends AppPlugin {
             // Try each JS candidate until one responds OK
             for (const jsName of jsCandidates) {
                 try {
-                    const jsRes = await fetch(baseUrl + jsName);
-                    if (jsRes.ok) {
-                        const pluginJs = await jsRes.text();
-                        foundJson.__source_repo = url;
+                    const pluginJs = await this._fetchGithubFile(owner, repo, branch, `${prefix}${jsName}`);
+                    foundJson.__source_repo = url;
 
-                        // Also try to grab CSS while we're here
-                        const cssCandidates = ['plugin.css', 'styles.css', `${repo}-plugin.css`, 'Custom CSS'];
-                        const result = { json: foundJson, js: pluginJs };
-                        let foundCssName = null;
-                        for (const cssName of cssCandidates) {
-                            try {
-                                const cssRes = await fetch(baseUrl + cssName);
-                                if (cssRes.ok) {
-                                    result.css = await cssRes.text();
-                                    foundCssName = cssName;
-                                    break;
-                                }
-                            } catch (e) { /* CSS is optional */ }
-                        }
-
-                        // Cache the discovered filenames for future fetches
-                        foundJson.__source_files = buildSourceFiles(branch, foundJsonName, jsName, foundCssName);
-                        return result;
+                    // Also try to grab CSS while we're here
+                    const cssCandidates = ['plugin.css', 'styles.css', `${repo}-plugin.css`, 'Custom CSS'];
+                    const result = { json: foundJson, js: pluginJs };
+                    let foundCssName = null;
+                    for (const cssName of cssCandidates) {
+                        try {
+                            result.css = await this._fetchGithubFile(owner, repo, branch, `${prefix}${cssName}`);
+                            foundCssName = cssName;
+                            break;
+                        } catch (e) { /* CSS is optional */ }
                     }
+
+                    // Cache the discovered filenames for future fetches
+                    foundJson.__source_files = buildSourceFiles(branch, foundJsonName, jsName, foundCssName);
+                    return result;
                 } catch (e) { /* try next */ }
             }
         }
