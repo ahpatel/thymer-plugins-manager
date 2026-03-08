@@ -2127,16 +2127,7 @@ class Plugin extends AppPlugin {
 
         if (existingPlugin) {
             if (!interactive || confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
-                if (pType === 'collection') {
-                    // For collections: trash and recreate so that fields/views/item_name are applied
-                    // cleanly via savePlugin on a fresh instance (Thymer may not update schema on
-                    // existing collections via savePlugin/saveConfiguration).
-                    await existingPlugin.trashPlugin();
-                    targetPlugin = await this.data.createCollection();
-                    if (!targetPlugin) throw new Error("Failed to recreate collection container.");
-                } else {
-                    targetPlugin = existingPlugin;
-                }
+                targetPlugin = existingPlugin;
             } else {
                 return 'skipped';
             }
@@ -2163,66 +2154,41 @@ class Plugin extends AppPlugin {
             throw new Error(`"${jsonConf.name || 'Unknown'}" code exceeds the 500KB size limit.`);
         }
 
-        await targetPlugin.savePlugin(sanitizedConf, jsCode);
-
-        // For collections: apply the full schema (fields/views/etc.) via saveConfiguration.
-        // savePlugin reloads the plugin immediately, so targetPlugin may be a stale object.
-        // Re-fetch the live collection by name before calling saveConfiguration.
         const pTypeNorm = (jsonConf.type || '').toLowerCase();
         if (pTypeNorm === 'collection') {
-            try {
-                // Re-fetch the live collection object (savePlugin may have replaced the instance)
-                const freshCollections = await this.data.getAllCollections();
-                const freshTarget = freshCollections.find(c => {
-                    try { return c.getConfiguration().name === sanitizedConf.name; } catch(e) { return false; }
-                }) || targetPlugin;
+            // For collections: build schema conf and remap filter_colguid before saving.
+            // Use saveConfiguration (schema) + saveCode (code) separately rather than savePlugin,
+            // to avoid the immediate plugin reload from savePlugin racing with/overwriting the schema.
+            const allCollections = await this.data.getAllCollections();
+            const schemaConf = { ...sanitizedConf };
 
-                // Build the config to save: start from sanitizedConf but always include fields/views/etc.
-                // even if sanitizedConf.fields is empty (which would mean the source had no fields).
-                const schemaConf = { ...sanitizedConf };
-
-                console.log(`[Plugins Manager] DEBUG importing collection "${sanitizedConf.name}":`, {
-                    freshTargetFound: freshTarget !== targetPlugin,
-                    schemaConfFields: schemaConf.fields ? schemaConf.fields.length : 'undefined',
-                    schemaConfKeys: Object.keys(schemaConf),
-                    schemaConf: JSON.stringify(schemaConf).substring(0, 500),
-                });
-
-                // Remap filter_colguid for link-to-record fields: the exported GUID is from the
-                // source workspace; resolve using the annotated filter_colname in the target workspace
-                if (Array.isArray(schemaConf.fields) && schemaConf.fields.length > 0) {
-                    const hasColNames = schemaConf.fields.some(f => f.filter_colname);
-                    if (hasColNames) {
-                        const nameToGuid = {};
-                        for (const tc of freshCollections) {
-                            try {
-                                const tc_conf = tc.getConfiguration();
-                                const tc_guid = tc.getGuid ? tc.getGuid() : null;
-                                if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
-                            } catch (e) { }
-                        }
-                        schemaConf.fields = schemaConf.fields.map(f => {
-                            if (f.filter_colname && nameToGuid[f.filter_colname]) {
-                                const { filter_colname, ...rest } = f;
-                                return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
-                            }
-                            const { filter_colname, ...rest } = f;
-                            return rest;
-                        });
+            // Remap filter_colguid for link-to-record fields
+            if (Array.isArray(schemaConf.fields) && schemaConf.fields.length > 0) {
+                const hasColNames = schemaConf.fields.some(f => f.filter_colname);
+                if (hasColNames) {
+                    const nameToGuid = {};
+                    for (const tc of allCollections) {
+                        try {
+                            const tc_conf = tc.getConfiguration();
+                            const tc_guid = tc.getGuid ? tc.getGuid() : null;
+                            if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
+                        } catch (e) { }
                     }
+                    schemaConf.fields = schemaConf.fields.map(f => {
+                        if (f.filter_colname && nameToGuid[f.filter_colname]) {
+                            const { filter_colname, ...rest } = f;
+                            return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
+                        }
+                        const { filter_colname, ...rest } = f;
+                        return rest;
+                    });
                 }
-
-                const saveResult = await freshTarget.saveConfiguration(schemaConf);
-                console.log(`[Plugins Manager] DEBUG saveConfiguration result for "${sanitizedConf.name}":`, saveResult);
-                const verifyConf = freshTarget.getConfiguration ? freshTarget.getConfiguration() : null;
-                console.log(`[Plugins Manager] DEBUG post-save getConfiguration for "${sanitizedConf.name}":`, {
-                    fieldsCount: verifyConf && verifyConf.fields ? verifyConf.fields.length : 'N/A',
-                    item_name: verifyConf && verifyConf.item_name,
-                    page_field_ids: verifyConf && verifyConf.page_field_ids,
-                });
-            } catch (e) {
-                console.warn(`[Plugins Manager] saveConfiguration for collection "${jsonConf.name}" failed:`, e);
             }
+
+            await targetPlugin.saveConfiguration(schemaConf);
+            await targetPlugin.saveCode(jsCode);
+        } else {
+            await targetPlugin.savePlugin(sanitizedConf, jsCode);
         }
 
         // Security: sanitize and save CSS if provided
