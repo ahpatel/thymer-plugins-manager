@@ -143,6 +143,32 @@ class Plugin extends AppPlugin {
             }
 
             localStorage.setItem('pm_updates_available', JSON.stringify(updatesAvailable));
+
+            // Notify user if new updates were found
+            const updateCount = Object.keys(updatesAvailable).length;
+            if (updateCount > 0) {
+                const previousUpdatesStr = localStorage.getItem('pm_last_notified_updates') || '{}';
+                const previousUpdates = JSON.parse(previousUpdatesStr);
+                
+                // Only notify if there are updates we haven't notified about yet
+                let hasNewUpdates = false;
+                for (const [guid, ver] of Object.entries(updatesAvailable)) {
+                    if (previousUpdates[guid] !== ver) {
+                        hasNewUpdates = true;
+                        break;
+                    }
+                }
+
+                if (hasNewUpdates) {
+                    this.ui.addToaster({
+                        title: "Plugin Updates Available",
+                        message: `${updateCount} plugin${updateCount === 1 ? '' : 's'} can be updated. Open Plugins Manager to apply.`,
+                        autoDestroyTime: 8000,
+                        dismissible: true
+                    });
+                    localStorage.setItem('pm_last_notified_updates', JSON.stringify(updatesAvailable));
+                }
+            }
         } catch (e) {
             console.error("Background update check failed", e);
         }
@@ -168,6 +194,8 @@ class Plugin extends AppPlugin {
                         <button class="pm-btn primary" id="pm-install-global-btn">Install Global Plugin</button>
                         <button class="pm-btn" id="pm-import-global-btn">Import Plugins</button>
                         <button class="pm-btn" id="pm-export-global-btn">Export Plugins</button>
+                        <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for updates"><span style="font-family: 'tabler-icons';">↻</span></button>
+                        <button class="pm-btn pm-btn-update update-btn" id="pm-update-all-global-btn" style="display: none;">Update All</button>
                     </div>
                     <div id="pm-global-list" class="pm-list-container">Loading...</div>
                 </div>
@@ -177,6 +205,8 @@ class Plugin extends AppPlugin {
                         <button class="pm-btn primary" id="pm-install-col-btn">Install Collection Plugin</button>
                         <button class="pm-btn" id="pm-import-col-btn">Import Collections</button>
                         <button class="pm-btn" id="pm-export-col-btn">Export Collections</button>
+                        <button class="pm-btn pm-btn-update" id="pm-check-updates-col-btn" title="Check for updates"><span style="font-family: 'tabler-icons';">↻</span></button>
+                        <button class="pm-btn pm-btn-update update-btn" id="pm-update-all-col-btn" style="display: none;">Update All</button>
                     </div>
                     <div id="pm-collections-list" class="pm-list-container">Loading...</div>
                 </div>
@@ -390,10 +420,14 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-install-global-btn').addEventListener('click', () => this.showInstallDialog(container, 'app'));
         container.querySelector('#pm-import-global-btn').addEventListener('click', () => this.showImportDialog(container, 'app'));
         container.querySelector('#pm-export-global-btn').addEventListener('click', () => this.showExportDialog('app'));
+        container.querySelector('#pm-check-updates-global-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'app'));
+        container.querySelector('#pm-update-all-global-btn').addEventListener('click', () => this._updateAllAvailable(container, 'app'));
 
         container.querySelector('#pm-install-col-btn').addEventListener('click', () => this.showInstallDialog(container, 'collection'));
         container.querySelector('#pm-import-col-btn').addEventListener('click', () => this.showImportDialog(container, 'collection'));
         container.querySelector('#pm-export-col-btn').addEventListener('click', () => this.showExportDialog('collection'));
+        container.querySelector('#pm-check-updates-col-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'collection'));
+        container.querySelector('#pm-update-all-col-btn').addEventListener('click', () => this._updateAllAvailable(container, 'collection'));
     }
 
 
@@ -821,6 +855,24 @@ class Plugin extends AppPlugin {
             return;
         }
 
+        // Toggle Update All button visibility if there are known updates for this tab
+        try {
+            const availableUpdates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+            let hasUpdatesForTab = false;
+            for (const p of plugins) {
+                if (availableUpdates[p.getGuid()]) {
+                    hasUpdatesForTab = true;
+                    break;
+                }
+            }
+            
+            const btnId = typeFilter === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
+            const updateAllBtn = panelContainer.querySelector(btnId);
+            if (updateAllBtn) {
+                updateAllBtn.style.display = hasUpdatesForTab ? 'inline-block' : 'none';
+            }
+        } catch(e) {}
+
         plugins.forEach(p => {
             let conf;
             try {
@@ -866,13 +918,28 @@ class Plugin extends AppPlugin {
             // Add Native Update Button
             let updateBtn = null;
             if (sourceRepo) {
+                // Check if update is known from background checker
+                let knownUpdate = false;
+                try {
+                    const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                    if (available[p.getGuid()] && available[p.getGuid()] !== conf.version) {
+                        knownUpdate = available[p.getGuid()];
+                    }
+                } catch (e) {}
+
                 updateBtn = document.createElement('button');
-                updateBtn.className = 'pm-btn pm-btn-update';
-                updateBtn.title = 'Check Update';
-                updateBtn.appendChild(this.ui.createIcon('refresh'));
+                updateBtn.className = knownUpdate ? 'pm-btn pm-btn-update update-btn' : 'pm-btn pm-btn-update';
+                updateBtn.title = knownUpdate ? `Update to v${knownUpdate}` : 'Check Update';
+                updateBtn.appendChild(this.ui.createIcon(knownUpdate ? 'arrow-up' : 'refresh'));
                 actionsContainer.appendChild(updateBtn);
 
-                updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
+                const badge = card.querySelector(`#vbadge-${p.getGuid()}`);
+                if (knownUpdate) {
+                    badge.innerText = `Update Available (v${knownUpdate})`;
+                    badge.classList.add('update');
+                }
+
+                updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer, knownUpdate));
 
                 // Reinstall button — force re-download from source without version check
                 const reinstallBtn = document.createElement('button');
@@ -2109,6 +2176,126 @@ class Plugin extends AppPlugin {
         return targetPlugin;
     }
 
+    async _manualCheckForUpdates(container, filterType) {
+        const btnId = filterType === 'app' ? '#pm-check-updates-global-btn' : '#pm-check-updates-col-btn';
+        const btn = container.querySelector(btnId);
+        if (!btn) return;
+
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '';
+        btn.appendChild(this.ui.createIcon('loader'));
+        btn.disabled = true;
+
+        try {
+            await this.checkForAllUpdatesInBackground();
+            this.loadPlugins(container);
+            this.ui.addToaster({
+                title: "Update Check Complete",
+                message: "Checked for new versions.",
+                autoDestroyTime: 3000,
+                dismissible: true
+            });
+        } catch (e) {
+            this.ui.addToaster({
+                title: "Update Check Failed",
+                message: e.message,
+                autoDestroyTime: 5000,
+                dismissible: true
+            });
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    }
+
+    async _updateAllAvailable(container, filterType) {
+        const btnId = filterType === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
+        const btn = container.querySelector(btnId);
+        if (!btn) return;
+
+        // Collect plugins that have known updates
+        const availableUpdates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+        if (Object.keys(availableUpdates).length === 0) return;
+
+        let pluginsToUpdate = [];
+        try {
+            if (filterType === 'app' || filterType === 'all') {
+                pluginsToUpdate = pluginsToUpdate.concat(await this.data.getAllGlobalPlugins());
+            }
+            if (filterType === 'collection' || filterType === 'all') {
+                pluginsToUpdate = pluginsToUpdate.concat(await this.data.getAllCollections());
+            }
+        } catch(e) {}
+
+        pluginsToUpdate = pluginsToUpdate.filter(p => {
+            try {
+                return availableUpdates[p.getGuid()];
+            } catch(e) { return false; }
+        });
+
+        if (pluginsToUpdate.length === 0) return;
+
+        if (!confirm(`Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\n\nWarning: This will overwrite any local code modifications for these plugins.`)) {
+            return;
+        }
+
+        const originalText = btn.innerText;
+        btn.innerHTML = '';
+        btn.appendChild(this.ui.createIcon('loader'));
+        btn.disabled = true;
+
+        let successCount = 0;
+        let failedNames = [];
+
+        for (const p of pluginsToUpdate) {
+            try {
+                const conf = p.getExistingCodeAndConfig().json;
+                const sourceRepo = conf.__source_repo;
+                if (!sourceRepo) continue;
+
+                // Call checkAndUpdatePlugin but bypassing UI prompts and buttons
+                const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
+                
+                this._validatePluginJS(remoteJson.name, remoteJs);
+                const sanitizedConf = this._sanitizePluginConfig(remoteJson);
+                await p.savePlugin(sanitizedConf, remoteJs);
+
+                if (remoteCss) {
+                    const sanitizedCSS = this._sanitizeCSS(remoteCss);
+                    await p.saveCSS(sanitizedCSS);
+                }
+
+                // Clear from known updates
+                delete availableUpdates[p.getGuid()];
+                localStorage.setItem('pm_updates_available', JSON.stringify(availableUpdates));
+                
+                successCount++;
+            } catch (err) {
+                console.error(err);
+                try {
+                    const conf = p.getExistingCodeAndConfig().json;
+                    failedNames.push(conf.name || 'Unknown');
+                } catch(e) { failedNames.push(p.getGuid()); }
+            }
+        }
+
+        this._autoExport();  // fire-and-forget
+        this.loadPlugins(container);
+
+        btn.innerText = originalText;
+        btn.disabled = false;
+
+        const parts = [`Successfully updated: ${successCount}`];
+        if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
+        
+        this.ui.addToaster({
+            title: failedNames.length > 0 ? "Update All Completed with Errors" : "Update All Successful",
+            message: parts.join('. '),
+            dismissible: true,
+            autoDestroyTime: failedNames.length > 0 ? 8000 : 5000
+        });
+    }
+
     async showImportDialog(container, typeFilter) {
         const overlayHtml = `
             <div id="pm-import-modal" class="pm-modal">
@@ -2261,24 +2448,47 @@ class Plugin extends AppPlugin {
         });
     }
 
-    async checkAndUpdatePlugin(pluginObj, currentConf, sourceRepo, btnEl, container) {
+    async checkAndUpdatePlugin(pluginObj, currentConf, sourceRepo, btnEl, container, knownUpdateVersion = null) {
         try {
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('loader'));
             btnEl.disabled = true;
 
-            const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
+            let remoteJson, remoteJs, remoteCss;
+            try {
+                const res = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
+                remoteJson = res.json;
+                remoteJs = res.js;
+                remoteCss = res.css;
+            } catch (fetchErr) {
+                throw new Error(`Failed to fetch from ${sourceRepo}: ${fetchErr.message}`);
+            }
 
             if (remoteJson.version === currentConf.version) {
                 this.ui.addToaster({ title: "Up to date", message: `${currentConf.name} is already on the latest version.`, autoDestroyTime: 3000, dismissible: true });
+                btnEl.className = 'pm-btn pm-btn-update';
                 btnEl.innerHTML = '';
                 btnEl.appendChild(this.ui.createIcon('check'));
+                
+                // Clear from known updates
+                try {
+                    const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                    delete available[pluginObj.getGuid()];
+                    localStorage.setItem('pm_updates_available', JSON.stringify(available));
+                } catch(e) {}
+
+                const badge = document.getElementById(`vbadge-${pluginObj.getGuid()}`);
+                if (badge) {
+                    badge.innerText = `v${currentConf.version}`;
+                    badge.classList.remove('update');
+                }
+
                 setTimeout(() => {
                     btnEl.innerHTML = '';
                     btnEl.appendChild(this.ui.createIcon('refresh'));
                     btnEl.disabled = false;
                 }, 3000);
-                return;
+                return true;
             }
 
             // Update available!
@@ -2290,11 +2500,18 @@ class Plugin extends AppPlugin {
 
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('arrow-up'));
-            btnEl.classList.add('update-btn');
+            btnEl.className = 'pm-btn pm-btn-update update-btn';
             btnEl.disabled = false;
 
+            // Update local storage so indicator persists
+            try {
+                const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                available[pluginObj.getGuid()] = remoteJson.version;
+                localStorage.setItem('pm_updates_available', JSON.stringify(available));
+            } catch(e) {}
+
             // Overwrite click handler to apply update
-            btnEl.onclick = async () => {
+            const applyUpdate = async () => {
                 // Local modifications warning check (simple length/hash comparison could go here in future)
                 if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
                     this._validatePluginJS(remoteJson.name, remoteJs);
@@ -2306,11 +2523,28 @@ class Plugin extends AppPlugin {
                         await pluginObj.saveCSS(sanitizedCSS);
                     }
 
+                    // Clear from known updates
+                    try {
+                        const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                        delete available[pluginObj.getGuid()];
+                        localStorage.setItem('pm_updates_available', JSON.stringify(available));
+                    } catch(e) {}
+
                     this._autoExport();  // fire-and-forget
                     this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
                     this.loadPlugins(container);
+                    return true;
                 }
+                return false;
             };
+
+            // If we already knew about this update, the click intent was to apply it, not just check
+            if (knownUpdateVersion) {
+                return await applyUpdate();
+            } else {
+                btnEl.onclick = applyUpdate;
+                return true;
+            }
 
         } catch (err) {
             console.error(err);
@@ -2318,6 +2552,7 @@ class Plugin extends AppPlugin {
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('refresh'));
             btnEl.disabled = false;
+            return false;
         }
     }
 

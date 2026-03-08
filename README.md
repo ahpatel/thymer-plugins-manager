@@ -1,6 +1,6 @@
 # Thymer Plugins Manager
 
-A powerful utility plugin for Thymer that allows you to install, manage, update, import, and export your Plugins and Collection Plugins from a single unified interface.
+A utility plugin for Thymer that allows you to install, manage, update, import, and export your Plugins and Collection Plugins from a single unified interface.
 
 ## Features
 
@@ -19,6 +19,8 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 - **Search & Filter**: Filter by name, description, or category. Filter chips for App Plugins, Collections, and Themes.
 - **Theme Preview & Save**: Preview theme screenshots directly from the plugin's README, and save themes directly to your local Theme Library.
 - **Incompatible Plugin Handling**: Plugins that fail to install are automatically added to an exception list (persisted in localStorage with 30-day TTL). Greyed-out Install buttons with a manual "Recheck" option to test for newer, compatible versions.
+- **One-Click Installs**: Install community plugins directly from the Discover tab without copy-pasting code.
+- **Smart Updates**: Background update checker runs twice daily and notifies you when new versions are available. Update a single plugin with one click or use "Update All" to batch apply all pending updates.
 
 ### Import & Export
 
@@ -40,11 +42,11 @@ A powerful utility plugin for Thymer that allows you to install, manage, update,
 
 Since this plugin manages other plugins, it must be installed manually first.
 
-1. Create a new **App Plugin** in your Thymer workspace.
+1. Create a new **Plugin** in your Thymer workspace.
 2. Paste the contents of `plugin.js` into the **Custom Code** section of the plugin.
 3. Paste the contents of `plugin.json` into the **Config** section.
 4. Paste the contents of `styles.css` into the **Custom CSS** section.
-5. Save the plugin. A new **Plugins Manager** icon will appear in your sidebar.
+5. Save the plugin. A new **Plugins Manager** icon (📦) will appear in your statusbar.
 
 ### Self-Update
 
