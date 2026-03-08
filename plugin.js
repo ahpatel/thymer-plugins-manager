@@ -2532,7 +2532,19 @@ class Plugin extends AppPlugin {
 
                     this._autoExport();  // fire-and-forget
                     this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
-                    this.loadPlugins(container);
+                    
+                    // If the plugin being updated is Plugins Manager itself, reload its panel
+                    if (pluginObj.getGuid() === this.getGuid()) {
+                        const panel = this.ui.getActivePanel();
+                        if (panel) {
+                            setTimeout(() => {
+                                panel.navigateToCustomType("plugin-manager-panel");
+                            }, 500);
+                        }
+                    } else {
+                        this.loadPlugins(container);
+                    }
+                    
                     return true;
                 }
                 return false;
