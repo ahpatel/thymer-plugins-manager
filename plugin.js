@@ -70,6 +70,19 @@ class Plugin extends AppPlugin {
             }
         });
 
+        // Check if we just updated ourselves
+        if (localStorage.getItem('pm_self_update_pending') === 'true') {
+            localStorage.removeItem('pm_self_update_pending');
+            setTimeout(async () => {
+                try {
+                    const newPanel = await this.ui.createPanel();
+                    if (newPanel) {
+                        newPanel.navigateToCustomType("plugin-manager-panel");
+                    }
+                } catch (e) { console.error('Failed to reopen panel after self-update', e); }
+            }, 800);
+        }
+
         // Start automated update checker
         this.startAutomatedUpdateChecker();
     }
@@ -958,14 +971,28 @@ class Plugin extends AppPlugin {
                         const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
                         this._validatePluginJS(remoteJson.name, remoteJs);
                         const sanitizedConf = this._sanitizePluginConfig(remoteJson);
-                        await p.savePlugin(sanitizedConf, remoteJs);
+                        
+                        const isSelfUpdate = p.getGuid() === this.getGuid();
+
                         if (remoteCss) {
                             const sanitizedCSS = this._sanitizeCSS(remoteCss);
                             await p.saveCSS(sanitizedCSS);
                         }
-                        this._autoExport();
-                        this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
-                        this.loadPlugins(panelContainer);
+
+                        if (isSelfUpdate) {
+                            const panel = this.ui.getActivePanel();
+                            if (panel) this.ui.closePanel(panel);
+                            localStorage.setItem('pm_self_update_pending', 'true');
+                        } else {
+                            this._autoExport();
+                            this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
+                        }
+
+                        await p.savePlugin(sanitizedConf, remoteJs);
+                        
+                        if (!isSelfUpdate) {
+                            this.loadPlugins(panelContainer);
+                        }
                     } catch (e) {
                         this.ui.addToaster({ title: 'Reinstall Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
                         reinstallBtn.innerHTML = '';
@@ -2235,6 +2262,14 @@ class Plugin extends AppPlugin {
 
         if (pluginsToUpdate.length === 0) return;
 
+        // Sort so that Plugins Manager (this plugin) updates LAST.
+        // Updating self terminates the plugin context immediately.
+        pluginsToUpdate.sort((a, b) => {
+            if (a.getGuid() === this.getGuid()) return 1;
+            if (b.getGuid() === this.getGuid()) return -1;
+            return 0;
+        });
+
         if (!confirm(`Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\n\nWarning: This will overwrite any local code modifications for these plugins.`)) {
             return;
         }
@@ -2258,7 +2293,8 @@ class Plugin extends AppPlugin {
                 
                 this._validatePluginJS(remoteJson.name, remoteJs);
                 const sanitizedConf = this._sanitizePluginConfig(remoteJson);
-                await p.savePlugin(sanitizedConf, remoteJs);
+                
+                const isSelfUpdate = p.getGuid() === this.getGuid();
 
                 if (remoteCss) {
                     const sanitizedCSS = this._sanitizeCSS(remoteCss);
@@ -2269,6 +2305,23 @@ class Plugin extends AppPlugin {
                 delete availableUpdates[p.getGuid()];
                 localStorage.setItem('pm_updates_available', JSON.stringify(availableUpdates));
                 
+                if (isSelfUpdate) {
+                    const panel = this.ui.getActivePanel();
+                    if (panel) this.ui.closePanel(panel);
+                    
+                    const parts = [`Successfully updated: ${successCount + 1}`];
+                    if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
+                    this.ui.addToaster({
+                        title: failedNames.length > 0 ? "Update All Completed with Errors" : "Update All Successful",
+                        message: parts.join('. '),
+                        dismissible: true,
+                        autoDestroyTime: failedNames.length > 0 ? 8000 : 5000
+                    });
+
+                    localStorage.setItem('pm_self_update_pending', 'true');
+                }
+
+                await p.savePlugin(sanitizedConf, remoteJs);
                 successCount++;
             } catch (err) {
                 console.error(err);
@@ -2516,7 +2569,8 @@ class Plugin extends AppPlugin {
                 if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
                     this._validatePluginJS(remoteJson.name, remoteJs);
                     const sanitizedConf = this._sanitizePluginConfig(remoteJson);
-                    await pluginObj.savePlugin(sanitizedConf, remoteJs);
+                    
+                    const isSelfUpdate = pluginObj.getGuid() === this.getGuid();
 
                     if (remoteCss) {
                         const sanitizedCSS = this._sanitizeCSS(remoteCss);
@@ -2530,18 +2584,18 @@ class Plugin extends AppPlugin {
                         localStorage.setItem('pm_updates_available', JSON.stringify(available));
                     } catch(e) {}
 
-                    this._autoExport();  // fire-and-forget
-                    this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
-                    
-                    // If the plugin being updated is Plugins Manager itself, reload its panel
-                    if (pluginObj.getGuid() === this.getGuid()) {
+                    if (isSelfUpdate) {
                         const panel = this.ui.getActivePanel();
-                        if (panel) {
-                            setTimeout(() => {
-                                panel.navigateToCustomType("plugin-manager-panel");
-                            }, 500);
-                        }
+                        if (panel) this.ui.closePanel(panel);
+                        localStorage.setItem('pm_self_update_pending', 'true');
                     } else {
+                        this._autoExport();  // fire-and-forget
+                        this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
+                    }
+                    
+                    await pluginObj.savePlugin(sanitizedConf, remoteJs);
+                    
+                    if (!isSelfUpdate) {
                         this.loadPlugins(container);
                     }
                     
