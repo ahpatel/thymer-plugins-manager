@@ -290,9 +290,34 @@
 }
 
 .pm-badge.update {
-    background: #f59e0b;
+    background: var(--enum-purple-bg, #8b5cf6);
     color: white;
-    border-color: #f59e0b;
+    border-color: var(--enum-purple-bg, #8b5cf6);
+}
+
+.pm-card-upgradeable {
+    border-color: var(--enum-purple-bg, #8b5cf6);
+    box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
+    position: relative;
+    overflow: hidden;
+}
+
+.pm-card-upgradeable::after {
+    content: "UPDATE";
+    position: absolute;
+    top: 7px;
+    right: -28px;
+    background: var(--enum-purple-bg, #8b5cf6);
+    color: white;
+    font-size: 9px;
+    font-weight: 900;
+    width: 100px;
+    text-align: center;
+    padding: 2px 0;
+    transform: rotate(45deg);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    pointer-events: none;
+    z-index: 10;
 }
 
 .pm-badge-plugin {

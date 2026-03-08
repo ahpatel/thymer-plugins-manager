@@ -47,7 +47,7 @@ class Plugin extends AppPlugin {
         });
 
         // Add a status bar button to launch it
-        this.ui.addStatusBarItem({
+        this._statusBarItem = this.ui.addStatusBarItem({
             icon: "box",
             tooltip: "Plugins Manager",
             onClick: async () => {
@@ -57,6 +57,8 @@ class Plugin extends AppPlugin {
                 }
             }
         });
+
+        this._updateStatusBarIcon();
 
         // Start automated update checker
         this.startAutomatedUpdateChecker();
@@ -94,14 +96,19 @@ class Plugin extends AppPlugin {
         this._updateIntervalId = setInterval(() => this.checkForAllUpdatesInBackground(), 12 * 60 * 60 * 1000);
     }
 
-    async checkForAllUpdatesInBackground() {
+    async checkForAllUpdatesInBackground(options = {}) {
+        const isManual = options.manual === true;
+        if (isManual) {
+            this.ui.addToaster({ title: "Checking for updates...", message: "This may take a moment depending on the number of plugins.", autoDestroyTime: 3000, dismissible: true });
+        }
+
         try {
             const updatesAvailable = {};
             const allGlobals = await this.data.getAllGlobalPlugins();
             const allCollections = await this.data.getAllCollections();
             const allPlugins = [...allGlobals, ...allCollections];
             let checkCount = 0;
-            const MAX_CHECKS = 50; // Cap to avoid massive rate limits in one run
+            const MAX_CHECKS = isManual ? 100 : 50; // Higher cap for manual checks
 
             for (const p of allPlugins) {
                 if (checkCount >= MAX_CHECKS) break;
@@ -113,26 +120,62 @@ class Plugin extends AppPlugin {
                         checkCount++;
                         const { json: remoteJson } = await this.fetchGithubRepo(repo, { sourceFiles: json.__source_files });
                         if (remoteJson.version && remoteJson.version !== json.version) {
-                            updatesAvailable[p.getGuid()] = remoteJson.version;
+                            updatesAvailable[p.getGuid()] = { 
+                                name: json.name || "Unnamed Plugin", 
+                                version: remoteJson.version 
+                            };
                         }
                         // Avoid GitHub rate limiting between requests
-                        await new Promise(r => setTimeout(r, 1000));
+                        await new Promise(r => setTimeout(r, isManual ? 500 : 1000));
                     }
                 } catch (e) {
-                    // Bail early if rate-limited
                     if (e.message && (e.message.includes('rate limit') || e.message.includes('403'))) {
-                        console.warn('[Plugins Manager] GitHub rate limit hit during background check, stopping early.');
-                        // Add exponential backoff style delay to prevent immediate retries from locking up further
-                        localStorage.setItem('pm_last_update_check', (Date.now() + 6 * 60 * 60 * 1000).toString()); // push next check 6 hrs out
+                        console.warn('[Plugins Manager] GitHub rate limit hit during check, stopping early.');
+                        if (isManual) {
+                            this.ui.addToaster({ title: "Rate Limit Hit", message: "GitHub API rate limit reached. Please try again later or add a PAT in Settings.", autoDestroyTime: 5000, dismissible: true });
+                        }
+                        localStorage.setItem('pm_last_update_check', (Date.now() + 6 * 60 * 60 * 1000).toString());
                         break;
                     }
-                    /* ignore individual plugin errors */
                 }
             }
 
+            const count = Object.keys(updatesAvailable).length;
             localStorage.setItem('pm_updates_available', JSON.stringify(updatesAvailable));
+            
+            if (count > 0) {
+                const pluginNames = Object.values(updatesAvailable).map(u => u.name).join(', ');
+                this.ui.addToaster({ 
+                    title: "Updates Available", 
+                    message: `Found ${count} update${count > 1 ? 's' : ''}: ${pluginNames}. Open Plugins Manager to apply them.`, 
+                    autoDestroyTime: 10000, 
+                    dismissible: true 
+                });
+            } else if (isManual) {
+                this.ui.addToaster({ title: "No Updates Found", message: "All your plugins are up to date!", autoDestroyTime: 3000, dismissible: true });
+            }
+
+            // Update status bar if it exists
+            this._updateStatusBarIcon();
+
         } catch (e) {
-            console.error("Background update check failed", e);
+            console.error("Update check failed", e);
+            if (isManual) {
+                this.ui.addToaster({ title: "Update Check Failed", message: e.message, autoDestroyTime: 5000, dismissible: true });
+            }
+        }
+    }
+
+    _updateStatusBarIcon() {
+        if (!this._statusBarItem) return;
+        const updates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+        const count = Object.keys(updates).length;
+        if (count > 0) {
+            const pluginNames = Object.values(updates).map(u => u.name).join(', ');
+            // Some environments truncate native tooltips; keep it to two lines maximum
+            this._statusBarItem.setTooltip(`Plugins Manager: ${count} update${count > 1 ? 's' : ''} available\n${pluginNames}`);
+        } else {
+            this._statusBarItem.setTooltip("Plugins Manager");
         }
     }
 
@@ -141,6 +184,9 @@ class Plugin extends AppPlugin {
             <div class="pm-container">
                 <div class="pm-header">
                     <h1 style="margin: 0;">Plugins Manager</h1>
+                    <button class="pm-btn" id="pm-check-updates-btn" style="margin-left: auto; gap: 6px;">
+                        Check for Updates
+                    </button>
                 </div>
                 
                 <div class="pm-tabs">
@@ -245,6 +291,10 @@ class Plugin extends AppPlugin {
     }
 
     bindEvents(container, panel) {
+        container.querySelector('#pm-check-updates-btn').addEventListener('click', () => {
+            this.checkForAllUpdatesInBackground({ manual: true });
+        });
+
         // Tabs
         container.querySelector('.pm-tabs').addEventListener('click', (e) => {
             const tabBtn = e.target.closest('.pm-tab');
@@ -831,16 +881,39 @@ class Plugin extends AppPlugin {
 
             const actionsContainer = card.querySelector('.pm-card-actions');
 
+            // Check if updates are available in cache
+            const updates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+            const updateInfo = updates[p.getGuid()];
+            const remoteVersion = typeof updateInfo === 'object' ? updateInfo.version : updateInfo;
+            
+            if (remoteVersion && remoteVersion !== (conf.version || conf.ver)) {
+                card.classList.add('pm-card-upgradeable');
+                const badge = card.querySelector(`#vbadge-${p.getGuid()}`);
+                if (badge) {
+                    badge.innerText = `Update Available (v${remoteVersion})`;
+                    badge.classList.add('update');
+                }
+            }
+
             // Add Native Update Button
             let updateBtn = null;
             if (sourceRepo) {
                 updateBtn = document.createElement('button');
                 updateBtn.className = 'pm-btn pm-btn-update';
-                updateBtn.title = 'Check Update';
-                updateBtn.appendChild(this.ui.createIcon('refresh'));
+                
+                if (remoteVersion && remoteVersion !== (conf.version || conf.ver)) {
+                    // Update already known from background check
+                    updateBtn.title = 'Upgrade Plugin';
+                    updateBtn.appendChild(this.ui.createIcon('arrow-up'));
+                    updateBtn.classList.add('update-btn');
+                    updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer, { forceUpdate: true }));
+                } else {
+                    // Default state: Check for updates
+                    updateBtn.title = 'Check Update';
+                    updateBtn.appendChild(this.ui.createIcon('refresh'));
+                    updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
+                }
                 actionsContainer.appendChild(updateBtn);
-
-                updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
 
                 // Reinstall button — force re-download from source without version check
                 const reinstallBtn = document.createElement('button');
@@ -1390,7 +1463,8 @@ class Plugin extends AppPlugin {
             const pad = (n) => String(n).padStart(2, '0');
             const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
             const wsName = this._getWorkspaceName();
-            const filename = `thymer-plugins-backup-${wsName}-${ts}.json`;
+            const prefix = data.every(d => d.type === 'collection') ? 'thymer-collections-backup' : 'thymer-plugins-backup';
+            const filename = `${prefix}-${wsName}-${ts}.json`;
             const fileHandle = await this._autoExportDirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(jsonStr);
@@ -2062,7 +2136,8 @@ class Plugin extends AppPlugin {
         });
     }
 
-    async checkAndUpdatePlugin(pluginObj, currentConf, sourceRepo, btnEl, container) {
+    async checkAndUpdatePlugin(pluginObj, currentConf, sourceRepo, btnEl, container, options = {}) {
+        const forceUpdate = options.forceUpdate === true;
         try {
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('loader'));
@@ -2070,34 +2145,30 @@ class Plugin extends AppPlugin {
 
             const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
 
-            if (remoteJson.version === currentConf.version) {
+            if (!forceUpdate && remoteJson.version === currentConf.version) {
                 this.ui.addToaster({ title: "Up to date", message: `${currentConf.name} is already on the latest version.`, autoDestroyTime: 3000, dismissible: true });
                 btnEl.innerHTML = '';
                 btnEl.appendChild(this.ui.createIcon('check'));
                 setTimeout(() => {
                     btnEl.innerHTML = '';
                     btnEl.appendChild(this.ui.createIcon('refresh'));
+                    btnEl.title = 'Check Update';
                     btnEl.disabled = false;
                 }, 3000);
                 return;
             }
 
-            // Update available!
-            const badge = document.getElementById(`vbadge-${pluginObj.getGuid()}`);
+            // Update available or forceUpdate requested
+            const pGuid = pluginObj.getGuid();
+            const badge = document.getElementById(`vbadge-${pGuid}`);
             if (badge) {
                 badge.innerText = `Update Available (v${remoteJson.version})`;
                 badge.classList.add('update');
             }
 
-            btnEl.innerHTML = '';
-            btnEl.appendChild(this.ui.createIcon('arrow-up'));
-            btnEl.classList.add('update-btn');
-            btnEl.disabled = false;
-
-            // Overwrite click handler to apply update
-            btnEl.onclick = async () => {
-                // Local modifications warning check (simple length/hash comparison could go here in future)
-                if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
+            const applyUpgrade = async () => {
+                const pInfo = `${currentConf.name} from v${currentConf.version} to v${remoteJson.version}`;
+                if (confirm(`Update ${pInfo}?\n\nWarning: This will overwrite any local code modifications.`)) {
                     this._validatePluginJS(remoteJson.name, remoteJs);
                     const sanitizedConf = this._sanitizePluginConfig(remoteJson);
                     await pluginObj.savePlugin(sanitizedConf, remoteJs);
@@ -2107,17 +2178,41 @@ class Plugin extends AppPlugin {
                         await pluginObj.saveCSS(sanitizedCSS);
                     }
 
+                    // Remove from updates cache
+                    const updates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                    delete updates[pGuid];
+                    localStorage.setItem('pm_updates_available', JSON.stringify(updates));
+                    this._updateStatusBarIcon();
+
                     this._autoExport();  // fire-and-forget
                     this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
                     this.loadPlugins(container);
+                } else if (forceUpdate) {
+                    // Reset to upgrade state if cancelled during forced flow
+                    btnEl.innerHTML = '';
+                    btnEl.appendChild(this.ui.createIcon('arrow-up'));
+                    btnEl.title = 'Upgrade Plugin';
+                    btnEl.disabled = false;
                 }
             };
 
+            if (forceUpdate) {
+                await applyUpgrade();
+            } else {
+                btnEl.innerHTML = '';
+                btnEl.appendChild(this.ui.createIcon('arrow-up'));
+                btnEl.title = 'Apply Upgrade';
+                btnEl.classList.add('update-btn');
+                btnEl.disabled = false;
+                btnEl.onclick = applyUpgrade;
+            }
+
         } catch (err) {
             console.error(err);
-            this.ui.addToaster({ title: "Update Check Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
+            this.ui.addToaster({ title: "Update Failed", message: err.message, autoDestroyTime: 5000, dismissible: true });
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('refresh'));
+            btnEl.title = 'Check Update';
             btnEl.disabled = false;
         }
     }
@@ -2261,9 +2356,9 @@ class Plugin extends AppPlugin {
             a.href = url;
             const now = new Date();
             const pad = (n) => String(n).padStart(2, '0');
-            const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+            const prefix = typeFilter === 'collection' ? 'thymer-collections-backup' : 'thymer-plugins-backup';
             const wsName = this._getWorkspaceName();
-            a.download = `thymer-plugins-backup-${wsName}-${ts}.json`;
+            a.download = `${prefix}-${wsName}-${ts}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
