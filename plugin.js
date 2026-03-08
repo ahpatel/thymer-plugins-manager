@@ -9,8 +9,8 @@ class Plugin extends AppPlugin {
         }
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
-        this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}');
-        this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}');
+        try { this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}'); } catch (e) { this._disabledPlugins = {}; }
+        try { this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}'); } catch (e) { this._incompatiblePlugins = {}; }
         // Evict stale incompatible entries older than 30 days
         const _cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
         Object.keys(this._incompatiblePlugins).forEach(k => {
