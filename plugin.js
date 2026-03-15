@@ -1366,6 +1366,14 @@ class Plugin extends AppPlugin {
         if (!this._activeModals) this._activeModals = [];
         this._activeModals.push(el);
         document.body.appendChild(el);
+        
+        // Close modal when clicking outside its content area (on the background overlay)
+        el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('pm-modal')) {
+                this._closeModal(el);
+            }
+        });
+        
         return el;
     }
 
