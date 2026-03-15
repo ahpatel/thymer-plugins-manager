@@ -9,6 +9,7 @@ class Plugin extends AppPlugin {
         }
         this.communityRepos = localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
         this._updateIntervalId = null;
+        this._activeModals = []; // track all open modals for cleanup on unload
         try { this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}'); } catch (e) { this._disabledPlugins = {}; }
         try { this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}'); } catch (e) { this._incompatiblePlugins = {}; }
         // Evict stale incompatible entries older than 30 days
@@ -58,7 +59,30 @@ class Plugin extends AppPlugin {
             }
         });
 
-        this._updateStatusBarIcon();
+        // Add a command palette command to launch it
+        this.ui.addCommandPaletteCommand({
+            label: "Open Plugins Manager",
+            icon: "box",
+            onSelected: async () => {
+                const newPanel = await this.ui.createPanel();
+                if (newPanel) {
+                    newPanel.navigateToCustomType("plugin-manager-panel");
+                }
+            }
+        });
+
+        // Check if we just updated ourselves
+        if (localStorage.getItem('pm_self_update_pending') === 'true') {
+            localStorage.removeItem('pm_self_update_pending');
+            setTimeout(async () => {
+                try {
+                    const newPanel = await this.ui.createPanel();
+                    if (newPanel) {
+                        newPanel.navigateToCustomType("plugin-manager-panel");
+                    }
+                } catch (e) { console.error('Failed to reopen panel after self-update', e); }
+            }, 800);
+        }
 
         // Start automated update checker
         this.startAutomatedUpdateChecker();
@@ -71,11 +95,11 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
-        // Remove any dangling import modal from the DOM
-        if (this._importModal && this._importModal.parentNode) {
-            this._importModal.parentNode.removeChild(this._importModal);
-            this._importModal = null;
+        // Remove any dangling modals from the DOM to prevent memory leaks
+        for (const modal of (this._activeModals || [])) {
+            if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
         }
+        this._activeModals = [];
         // Disconnect responsive resize observer
         if (this._resizeObserver) {
             this._resizeObserver.disconnect();
@@ -112,7 +136,7 @@ class Plugin extends AppPlugin {
 
             for (const p of allPlugins) {
                 if (checkCount >= MAX_CHECKS) break;
-                
+
                 try {
                     const { json } = p.getExistingCodeAndConfig();
                     const repo = json.__source_repo;
@@ -120,9 +144,9 @@ class Plugin extends AppPlugin {
                         checkCount++;
                         const { json: remoteJson } = await this.fetchGithubRepo(repo, { sourceFiles: json.__source_files });
                         if (remoteJson.version && remoteJson.version !== json.version) {
-                            updatesAvailable[p.getGuid()] = { 
-                                name: json.name || "Unnamed Plugin", 
-                                version: remoteJson.version 
+                            updatesAvailable[p.getGuid()] = {
+                                name: json.name || "Unnamed Plugin",
+                                version: remoteJson.version
                             };
                         }
                         // Avoid GitHub rate limiting between requests
@@ -140,24 +164,33 @@ class Plugin extends AppPlugin {
                 }
             }
 
-            const count = Object.keys(updatesAvailable).length;
             localStorage.setItem('pm_updates_available', JSON.stringify(updatesAvailable));
-            
-            if (count > 0) {
-                const pluginNames = Object.values(updatesAvailable).map(u => u.name).join(', ');
-                this.ui.addToaster({ 
-                    title: "Updates Available", 
-                    message: `Found ${count} update${count > 1 ? 's' : ''}: ${pluginNames}. Open Plugins Manager to apply them.`, 
-                    autoDestroyTime: 10000, 
-                    dismissible: true 
-                });
-            } else if (isManual) {
-                this.ui.addToaster({ title: "No Updates Found", message: "All your plugins are up to date!", autoDestroyTime: 3000, dismissible: true });
+
+            // Notify user if new updates were found
+            const updateCount = Object.keys(updatesAvailable).length;
+            if (updateCount > 0) {
+                const previousUpdatesStr = localStorage.getItem('pm_last_notified_updates') || '{}';
+                const previousUpdates = JSON.parse(previousUpdatesStr);
+
+                // Only notify if there are updates we haven't notified about yet
+                let hasNewUpdates = false;
+                for (const [guid, ver] of Object.entries(updatesAvailable)) {
+                    if (previousUpdates[guid] !== ver) {
+                        hasNewUpdates = true;
+                        break;
+                    }
+                }
+
+                if (hasNewUpdates) {
+                    this.ui.addToaster({
+                        title: "Plugin Updates Available",
+                        message: `${updateCount} plugin${updateCount === 1 ? '' : 's'} can be updated. Open Plugins Manager to apply.`,
+                        autoDestroyTime: 8000,
+                        dismissible: true
+                    });
+                    localStorage.setItem('pm_last_notified_updates', JSON.stringify(updatesAvailable));
+                }
             }
-
-            // Update status bar if it exists
-            this._updateStatusBarIcon();
-
         } catch (e) {
             console.error("Update check failed", e);
             if (isManual) {
@@ -199,9 +232,11 @@ class Plugin extends AppPlugin {
 
                 <div class="pm-tab-content active" id="tab-global">
                     <div class="pm-tab-actions">
-                        <button class="pm-btn primary" id="pm-install-global-btn">Install Global Plugin</button>
+                        <button class="pm-btn primary" id="pm-install-global-btn">Install Plugin</button>
                         <button class="pm-btn" id="pm-import-global-btn">Import Plugins</button>
                         <button class="pm-btn" id="pm-export-global-btn">Export Plugins</button>
+                        <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for updates"><span style="font-family: 'tabler-icons';">↻</span></button>
+                        <button class="pm-btn pm-btn-update update-btn" id="pm-update-all-global-btn" style="display: none;">Update All</button>
                     </div>
                     <div id="pm-global-list" class="pm-list-container">Loading...</div>
                 </div>
@@ -211,6 +246,8 @@ class Plugin extends AppPlugin {
                         <button class="pm-btn primary" id="pm-install-col-btn">Install Collection Plugin</button>
                         <button class="pm-btn" id="pm-import-col-btn">Import Collections</button>
                         <button class="pm-btn" id="pm-export-col-btn">Export Collections</button>
+                        <button class="pm-btn pm-btn-update" id="pm-check-updates-col-btn" title="Check for updates"><span style="font-family: 'tabler-icons';">↻</span></button>
+                        <button class="pm-btn pm-btn-update update-btn" id="pm-update-all-col-btn" style="display: none;">Update All</button>
                     </div>
                     <div id="pm-collections-list" class="pm-list-container">Loading...</div>
                 </div>
@@ -313,9 +350,7 @@ class Plugin extends AppPlugin {
                 this.loadDiscoverPlugins(container);
             }
 
-            if (tabId === 'global') this._renderGlobalList(container);
-            else if (tabId === 'collections') this._renderCollectionsList(container);
-            else if (tabId === 'discover') this._renderDiscoverList(container);
+            if (tabId === 'global' || tabId === 'collections') this.loadPlugins(container);
             else if (tabId === 'themes') this._renderThemesList(container);
         });
 
@@ -339,19 +374,19 @@ class Plugin extends AppPlugin {
             this.communityRepos = repos;
             localStorage.setItem('pm_community_repos', repos);
             this.githubPat = pat;
-            
+
             // To improve security, we save PAT in the plugin configuration
             const conf = this.getConfiguration();
             if (!conf.custom) conf.custom = {};
             conf.custom.githubPat = pat;
-            
+
             // Backup to localstorage in case plugin API fails to save
             if (pat) {
                 localStorage.setItem('pm_github_pat_persistent', pat);
             } else {
                 localStorage.removeItem('pm_github_pat_persistent');
             }
-            
+
             try {
                 const plugin = this.data.getPluginByGuid(this.getGuid());
                 if (plugin) {
@@ -428,10 +463,14 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-install-global-btn').addEventListener('click', () => this.showInstallDialog(container, 'app'));
         container.querySelector('#pm-import-global-btn').addEventListener('click', () => this.showImportDialog(container, 'app'));
         container.querySelector('#pm-export-global-btn').addEventListener('click', () => this.showExportDialog('app'));
+        container.querySelector('#pm-check-updates-global-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'app'));
+        container.querySelector('#pm-update-all-global-btn').addEventListener('click', () => this._updateAllAvailable(container, 'app'));
 
         container.querySelector('#pm-install-col-btn').addEventListener('click', () => this.showInstallDialog(container, 'collection'));
         container.querySelector('#pm-import-col-btn').addEventListener('click', () => this.showImportDialog(container, 'collection'));
         container.querySelector('#pm-export-col-btn').addEventListener('click', () => this.showExportDialog('collection'));
+        container.querySelector('#pm-check-updates-col-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'collection'));
+        container.querySelector('#pm-update-all-col-btn').addEventListener('click', () => this._updateAllAvailable(container, 'collection'));
     }
 
 
@@ -859,6 +898,24 @@ class Plugin extends AppPlugin {
             return;
         }
 
+        // Toggle Update All button visibility if there are known updates for this tab
+        try {
+            const availableUpdates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+            let hasUpdatesForTab = false;
+            for (const p of plugins) {
+                if (availableUpdates[p.getGuid()]) {
+                    hasUpdatesForTab = true;
+                    break;
+                }
+            }
+
+            const btnId = typeFilter === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
+            const updateAllBtn = panelContainer.querySelector(btnId);
+            if (updateAllBtn) {
+                updateAllBtn.style.display = hasUpdatesForTab ? 'inline-block' : 'none';
+            }
+        } catch (e) { }
+
         plugins.forEach(p => {
             let conf;
             try {
@@ -905,7 +962,7 @@ class Plugin extends AppPlugin {
             const updates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
             const updateInfo = updates[p.getGuid()];
             const remoteVersion = typeof updateInfo === 'object' ? updateInfo.version : updateInfo;
-            
+
             if (remoteVersion && remoteVersion !== (conf.version || conf.ver)) {
                 card.classList.add('pm-card-upgradeable');
                 const badge = card.querySelector(`#vbadge-${p.getGuid()}`);
@@ -918,9 +975,18 @@ class Plugin extends AppPlugin {
             // Add Native Update Button
             let updateBtn = null;
             if (sourceRepo) {
+                // Check if update is known from background checker
+                let knownUpdate = false;
+                try {
+                    const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                    if (available[p.getGuid()] && available[p.getGuid()] !== conf.version) {
+                        knownUpdate = available[p.getGuid()];
+                    }
+                } catch (e) { }
+
                 updateBtn = document.createElement('button');
-                updateBtn.className = 'pm-btn pm-btn-update';
-                
+                updateBtn.className = knownUpdate ? 'pm-btn pm-btn-update update-btn' : 'pm-btn pm-btn-update';
+
                 if (remoteVersion && remoteVersion !== (conf.version || conf.ver)) {
                     // Update already known from background check
                     updateBtn.title = 'Upgrade Plugin';
@@ -929,11 +995,19 @@ class Plugin extends AppPlugin {
                     updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer, { forceUpdate: true }));
                 } else {
                     // Default state: Check for updates
-                    updateBtn.title = 'Check Update';
-                    updateBtn.appendChild(this.ui.createIcon('refresh'));
+                    updateBtn.title = knownUpdate ? `Update to v${knownUpdate}` : 'Check Update';
+                    updateBtn.appendChild(this.ui.createIcon(knownUpdate ? 'arrow-up' : 'refresh'));
                     updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer));
                 }
                 actionsContainer.appendChild(updateBtn);
+
+                const badge = card.querySelector(`#vbadge-${p.getGuid()}`);
+                if (knownUpdate) {
+                    badge.innerText = `Update Available (v${knownUpdate})`;
+                    badge.classList.add('update');
+                }
+
+                updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer, knownUpdate));
 
                 // Reinstall button — force re-download from source without version check
                 const reinstallBtn = document.createElement('button');
@@ -952,14 +1026,28 @@ class Plugin extends AppPlugin {
                         const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
                         this._validatePluginJS(remoteJson.name, remoteJs);
                         const sanitizedConf = this._sanitizePluginConfig(remoteJson);
-                        await p.savePlugin(sanitizedConf, remoteJs);
+
+                        const isSelfUpdate = p.getGuid() === this.getGuid();
+
                         if (remoteCss) {
                             const sanitizedCSS = this._sanitizeCSS(remoteCss);
                             await p.saveCSS(sanitizedCSS);
                         }
-                        this._autoExport();
-                        this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
-                        this.loadPlugins(panelContainer);
+
+                        if (isSelfUpdate) {
+                            const panel = this.ui.getActivePanel();
+                            if (panel) this.ui.closePanel(panel);
+                            localStorage.setItem('pm_self_update_pending', 'true');
+                        } else {
+                            this._autoExport();
+                            this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
+                        }
+
+                        await p.savePlugin(sanitizedConf, remoteJs);
+
+                        if (!isSelfUpdate) {
+                            this.loadPlugins(panelContainer);
+                        }
                     } catch (e) {
                         this.ui.addToaster({ title: 'Reinstall Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
                         reinstallBtn.innerHTML = '';
@@ -1190,9 +1278,9 @@ class Plugin extends AppPlugin {
 
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
-        document.body.appendChild(tempDiv);
+        this._openModal(tempDiv);
 
-        tempDiv.querySelector('#pm-manual-theme-cancel').addEventListener('click', () => document.body.removeChild(tempDiv));
+        tempDiv.querySelector('#pm-manual-theme-cancel').addEventListener('click', () => this._closeModal(tempDiv));
         tempDiv.querySelector('#pm-manual-theme-save').addEventListener('click', () => {
             const name = tempDiv.querySelector('#pm-manual-theme-name').value.trim();
             const css = tempDiv.querySelector('#pm-manual-theme-css').value.trim();
@@ -1209,7 +1297,7 @@ class Plugin extends AppPlugin {
             });
             this._saveThemes();
             this._autoExport();
-            document.body.removeChild(tempDiv);
+            this._closeModal(tempDiv);
             this._renderThemesList(container);
             this.ui.addToaster({ title: 'Theme Saved', message: `"${name}" added to your theme library.`, autoDestroyTime: 3000, dismissible: true });
         });
@@ -1249,9 +1337,9 @@ class Plugin extends AppPlugin {
 
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
-        document.body.appendChild(tempDiv);
+        this._openModal(tempDiv);
 
-        tempDiv.querySelector('#pm-edit-theme-cancel').addEventListener('click', () => document.body.removeChild(tempDiv));
+        tempDiv.querySelector('#pm-edit-theme-cancel').addEventListener('click', () => this._closeModal(tempDiv));
         tempDiv.querySelector('#pm-edit-theme-save').addEventListener('click', () => {
             const name = tempDiv.querySelector('#pm-edit-theme-name').value.trim();
             const css = tempDiv.querySelector('#pm-edit-theme-css').value.trim();
@@ -1267,10 +1355,27 @@ class Plugin extends AppPlugin {
             };
             this._saveThemes();
             this._autoExport();
-            document.body.removeChild(tempDiv);
+            this._closeModal(tempDiv);
             this._renderThemesList(container);
             this.ui.addToaster({ title: 'Theme Updated', message: `"${name}" has been updated.`, autoDestroyTime: 3000, dismissible: true });
         });
+    }
+
+    /** Register a modal overlay so it gets cleaned up in onUnload if still open. */
+    _openModal(el) {
+        if (!this._activeModals) this._activeModals = [];
+        this._activeModals.push(el);
+        document.body.appendChild(el);
+        return el;
+    }
+
+    /** Remove a modal and deregister it from the active list. */
+    _closeModal(el) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+        if (this._activeModals) {
+            const idx = this._activeModals.indexOf(el);
+            if (idx !== -1) this._activeModals.splice(idx, 1);
+        }
     }
 
     async _exportAllThemes() {
@@ -1297,10 +1402,10 @@ class Plugin extends AppPlugin {
 
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
-        document.body.appendChild(tempDiv);
+        this._openModal(tempDiv);
         tempDiv.querySelector('#pm-all-themes-css').value = combined;
 
-        tempDiv.querySelector('#pm-themes-export-close').addEventListener('click', () => document.body.removeChild(tempDiv));
+        tempDiv.querySelector('#pm-themes-export-close').addEventListener('click', () => this._closeModal(tempDiv));
 
         tempDiv.querySelector('#pm-themes-export-copy').addEventListener('click', async (e) => {
             await navigator.clipboard.writeText(combined);
@@ -1314,7 +1419,9 @@ class Plugin extends AppPlugin {
             const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = blobUrl;
-            a.download = 'thymer-themes-combined.css';
+            const wsName = this._getWorkspaceName();
+            const ts = this._getBackupTimestamp();
+            a.download = `logseq-backup-themese-${wsName}-${ts}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1374,10 +1481,10 @@ class Plugin extends AppPlugin {
 
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = overlayHtml;
-            document.body.appendChild(tempDiv);
+            this._openModal(tempDiv);
 
             document.getElementById('pm-close-preview').addEventListener('click', () => {
-                document.body.removeChild(tempDiv);
+                this._closeModal(tempDiv);
             });
 
         } catch (e) {
@@ -1409,7 +1516,7 @@ class Plugin extends AppPlugin {
         // Strategy 2: Use GitHub API to list directory and find CSS-like files
         try {
             const files = await this._listRepoDirectory(owner, repo, subpath);
-            // First try the smart role-based finder
+            // First try the smart role-based finder (includes extensionless name matching)
             const cssFile = this._findFileByRole(files, 'css');
             if (cssFile) {
                 const res = await fetch(cssFile.download_url);
@@ -1420,6 +1527,19 @@ class Plugin extends AppPlugin {
             if (allCssFiles.length === 1 && allCssFiles[0].download_url) {
                 const res = await fetch(allCssFiles[0].download_url);
                 if (res.ok) return await res.text();
+            }
+
+            // Strategy 3: Content-sniff extensionless files with "css" in the name
+            // (reuses the same directory listing to avoid a second API call)
+            const candidates = files.filter(f =>
+                f.type === 'file' && !f.name.includes('.') && f.name.toLowerCase().includes('css')
+            );
+            for (const candidate of candidates) {
+                if (!candidate.download_url) continue;
+                const res = await fetch(candidate.download_url);
+                if (!res.ok) continue;
+                const text = await res.text();
+                if (this._looksLikeCSS(text)) return text;
             }
         } catch (e) { /* fall through */ }
 
@@ -1436,33 +1556,125 @@ class Plugin extends AppPlugin {
         const globalsData = allGlobals.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
-                return { name: json.name, type: json.type || 'app', version: json.version, source_repo: json.__source_repo, code, json };
+                return { name: json.name, type: 'plugin', version: json.version, source_repo: json.__source_repo, code, json };
             } catch (e) { return null; }
         });
+
+        // Build a guid->name map for all collections (for filter_colguid annotation)
+        const colGuidToName = {};
+        for (const p of allCollections) {
+            try {
+                const lc = p.getConfiguration();
+                const guid = p.getGuid ? p.getGuid() : null;
+                if (guid && lc && lc.name) colGuidToName[guid] = lc.name;
+            } catch (e) { }
+        }
 
         const collectionsData = allCollections.map(p => {
             try {
                 const { json, code } = p.getExistingCodeAndConfig();
-                
+
                 // Get the live configuration (which includes dynamically added properties and views)
                 // and merge it with the base JSON from the file.
                 let mergedJson = { ...json };
                 try {
                     const liveConfig = p.getConfiguration();
                     if (liveConfig) {
-                        if (liveConfig.properties) mergedJson.properties = liveConfig.properties;
-                        if (liveConfig.views) mergedJson.views = liveConfig.views;
-                        if (liveConfig.name) mergedJson.name = liveConfig.name;
+                        // Merge all live collection schema fields over the static json
+                        const schemaKeys = ['name', 'icon', 'color', 'item_name', 'description',
+                            'show_sidebar_items', 'show_cmdpal_items', 'sidebar_action',
+                            'fields', 'views', 'page_field_ids', 'sidebar_record_sort_field_id',
+                            'sidebar_record_sort_dir', 'managed', 'home', 'related_query'];
+                        for (const k of schemaKeys) {
+                            if (liveConfig[k] !== undefined) mergedJson[k] = liveConfig[k];
+                        }
                     }
                 } catch (configErr) {
                     console.warn(`[Plugins Manager] Failed to get live config for collection ${json.name}:`, configErr);
+                }
+
+                // Annotate link-to-record fields with the target collection name
+                // so the GUID can be remapped when importing into a different workspace
+                if (Array.isArray(mergedJson.fields)) {
+                    mergedJson.fields = mergedJson.fields.map(f => {
+                        if (f.filter_colguid && colGuidToName[f.filter_colguid]) {
+                            return { ...f, filter_colname: colGuidToName[f.filter_colguid] };
+                        }
+                        return f;
+                    });
                 }
 
                 return { name: mergedJson.name, type: 'collection', version: mergedJson.version, source_repo: mergedJson.__source_repo, code, json: mergedJson };
             } catch (e) { return null; }
         });
 
-        return [...globalsData, ...collectionsData].filter(Boolean);
+        const sorted = this._topoSortCollections(collectionsData.filter(Boolean), colGuidToName);
+        return [...globalsData, ...sorted];
+    }
+
+    /**
+     * Topologically sort collection export items so that collections depended upon
+     * (via link-to-record filter_colguid) appear before the collections that reference them.
+     * Falls back to original order for any cycles or unresolvable references.
+     */
+    _topoSortCollections(items, colGuidToName) {
+        // Build name->item index
+        const byName = {};
+        for (const item of items) {
+            if (item && item.name) byName[item.name] = item;
+        }
+
+        // Build adjacency: for each collection, which collection names does it depend on?
+        const deps = {};
+        for (const item of items) {
+            deps[item.name] = new Set();
+            const fields = item.json && item.json.fields;
+            if (Array.isArray(fields)) {
+                for (const f of fields) {
+                    const depName = f.filter_colname || (f.filter_colguid && colGuidToName[f.filter_colguid]);
+                    if (depName && depName !== item.name && byName[depName]) {
+                        deps[item.name].add(depName);
+                    }
+                }
+            }
+        }
+
+        // Kahn's algorithm (BFS topological sort)
+        const inDegree = {};
+        const dependents = {}; // dep -> [items that depend on it]
+        for (const item of items) {
+            inDegree[item.name] = inDegree[item.name] || 0;
+            dependents[item.name] = dependents[item.name] || [];
+        }
+        for (const item of items) {
+            for (const dep of deps[item.name]) {
+                inDegree[item.name] = (inDegree[item.name] || 0) + 1;
+                dependents[dep] = dependents[dep] || [];
+                dependents[dep].push(item.name);
+            }
+        }
+
+        const queue = items.filter(item => (inDegree[item.name] || 0) === 0).map(i => i.name);
+        const result = [];
+        const visited = new Set();
+
+        while (queue.length > 0) {
+            const name = queue.shift();
+            if (visited.has(name)) continue;
+            visited.add(name);
+            if (byName[name]) result.push(byName[name]);
+            for (const dependent of (dependents[name] || [])) {
+                inDegree[dependent] = (inDegree[dependent] || 1) - 1;
+                if (inDegree[dependent] === 0) queue.push(dependent);
+            }
+        }
+
+        // Append any remaining items not reached (cycles or isolated)
+        for (const item of items) {
+            if (!visited.has(item.name)) result.push(item);
+        }
+
+        return result;
     }
 
     /** Get the current workspace name from the hostname */
@@ -1476,6 +1688,24 @@ class Plugin extends AppPlugin {
             }
         } catch (e) { }
         return 'workspace';
+    }
+
+    _getBackupTimestamp() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    }
+
+    _getBackupJsonFilename(section) {
+        const wsName = this._getWorkspaceName();
+        const ts = this._getBackupTimestamp();
+        if (section === 'collection') {
+            return `thymer-backup-collections-${wsName}-${ts}.json`;
+        }
+        if (section === 'theme') {
+            return `logseq-backup-themese-${wsName}-${ts}.json`;
+        }
+        return `thymer-backup-plugins-${wsName}-${ts}.json`;
     }
 
     /** Auto-export full backup to chosen directory */
@@ -1494,12 +1724,7 @@ class Plugin extends AppPlugin {
             }
             const data = await this._getExportData();
             const jsonStr = JSON.stringify(data, null, 2);
-            const now = new Date();
-            const pad = (n) => String(n).padStart(2, '0');
-            const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-            const wsName = this._getWorkspaceName();
-            const prefix = data.every(d => d.type === 'collection') ? 'thymer-collections-backup' : 'thymer-plugins-backup';
-            const filename = `${prefix}-${wsName}-${ts}.json`;
+            const filename = this._getBackupJsonFilename('app');
             const fileHandle = await this._autoExportDirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(jsonStr);
@@ -1563,10 +1788,21 @@ class Plugin extends AppPlugin {
     /** Security: Whitelist allowed plugin.json config keys and enforce size limits */
     _sanitizePluginConfig(jsonConf) {
         const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions', '__source_repo', '__source_files', 'ver'];
+        const COLLECTION_SCHEMA_KEYS = ['color', 'item_name', 'show_sidebar_items', 'show_cmdpal_items',
+            'sidebar_action', 'fields', 'views', 'page_field_ids', 'sidebar_record_sort_field_id',
+            'sidebar_record_sort_dir', 'managed', 'home', 'related_query', 'default_banner'];
         const sanitized = {};
         for (const key of ALLOWED_KEYS) {
             if (jsonConf[key] !== undefined) {
                 sanitized[key] = jsonConf[key];
+            }
+        }
+        const isCollection = (jsonConf.type || '').toLowerCase() === 'collection';
+        if (isCollection) {
+            for (const key of COLLECTION_SCHEMA_KEYS) {
+                if (jsonConf[key] !== undefined) {
+                    sanitized[key] = jsonConf[key];
+                }
             }
         }
         return sanitized;
@@ -1732,7 +1968,31 @@ class Plugin extends AppPlugin {
             if (match) return match;
         }
 
+        // 5. (CSS only) Extensionless files containing "css" in the name (e.g., "theme-name-css")
+        if (role === 'css') {
+            const cssInName = onlyFiles.filter(f => !f.name.includes('.') && f.name.toLowerCase().includes('css'));
+            if (cssInName.length === 1) return cssInName[0];
+            if (cssInName.length > 1) {
+                const preferred = cssInName.find(f => /theme|style/i.test(f.name));
+                return preferred || cssInName[0];
+            }
+        }
+
         return null;
+    }
+
+    /**
+     * Simple heuristic to detect if text content is likely CSS.
+     * Checks for CSS rule blocks and common CSS patterns while rejecting JS/JSON.
+     */
+    _looksLikeCSS(text) {
+        if (!text || text.length < 10) return false;
+        const sample = text.substring(0, 2000);
+        if (!sample.includes('{') || !sample.includes('}')) return false;
+        // Reject obvious non-CSS (JavaScript / JSON)
+        if (/\b(function|const |let |var |module\.exports|require\(|import )\b/.test(sample)) return false;
+        // Check for CSS-like content
+        return /(:root|@media|@import|@font-face|color\s*:|background|font-|margin|padding|display\s*:|--[\w-]+\s*:)/i.test(sample);
     }
 
     async _fetchGithubFile(owner, repo, branch, path) {
@@ -1904,7 +2164,7 @@ class Plugin extends AppPlugin {
     // --- Core Features ---
 
     async showInstallDialog(container, typeFilter) {
-        const url = prompt(`Enter GitHub URL for the ${typeFilter === 'app' ? 'Global Plugin' : 'Collection Plugin'} (e.g. https://github.com/user/repo):`);
+        const url = prompt(`Enter GitHub URL for the ${typeFilter === 'app' ? 'Plugin' : 'Collection Plugin'} (e.g. https://github.com/user/repo):`);
         if (!url) return;
 
         try {
@@ -1922,7 +2182,7 @@ class Plugin extends AppPlugin {
             const filterIsGlobal = typeFilter === 'app';
 
             if (isGlobal !== filterIsGlobal) {
-                if (!confirm(`Warning: This repository appears to be a ${isGlobal ? 'Global Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Global Plugin' : 'Collection Plugin'}. Continue anyway?`)) {
+                if (!confirm(`Warning: This repository appears to be a ${isGlobal ? 'Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Plugin' : 'Collection Plugin'}. Continue anyway?`)) {
                     return;
                 }
             }
@@ -1958,6 +2218,24 @@ class Plugin extends AppPlugin {
 
         let targetPlugin = null;
 
+        // Determine the type early so we know how to handle existing plugins
+        let pType = jsonConf.type;
+        if (!pType) {
+            if (/extends\s+AppPlugin/.test(jsCode)) {
+                pType = "app";
+            } else if (/extends\s+(CollectionPlugin|JournalCorePlugin)/.test(jsCode)) {
+                pType = "collection";
+            }
+        }
+        if (!pType || (pType !== 'app' && pType !== 'global' && pType !== 'collection')) {
+            if (!interactive) {
+                pType = 'app';
+            } else {
+                const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Plugin, or Cancel for Collection Plugin.`);
+                pType = choice ? 'app' : 'collection';
+            }
+        }
+
         if (existingPlugin) {
             if (!interactive || confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
                 targetPlugin = existingPlugin;
@@ -1967,27 +2245,6 @@ class Plugin extends AppPlugin {
         }
 
         if (!targetPlugin) {
-            // Attempt to derive the type if it's missing in plugin.json
-            let pType = jsonConf.type;
-            if (!pType) {
-                // Check for class extension patterns (handles various whitespace/formatting)
-                if (/extends\s+AppPlugin/.test(jsCode)) {
-                    pType = "app";
-                } else if (/extends\s+(CollectionPlugin|JournalCorePlugin)/.test(jsCode)) {
-                    pType = "collection";
-                }
-            }
-
-            // If still unknown, ask the user
-            if (!pType || (pType !== 'app' && pType !== 'global' && pType !== 'collection')) {
-                if (!interactive) {
-                    pType = 'app'; // Default in non-interactive contexts
-                } else {
-                    const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Global Plugin, or Cancel for Collection Plugin.`);
-                    pType = choice ? 'app' : 'collection';
-                }
-            }
-
             if (pType === 'app' || pType === 'global') {
                 targetPlugin = await this.data.createGlobalPlugin();
             } else if (pType === 'collection') {
@@ -2008,6 +2265,31 @@ class Plugin extends AppPlugin {
             throw new Error(`"${jsonConf.name || 'Unknown'}" code exceeds the 500KB size limit.`);
         }
 
+        // For collections: remap filter_colguid for link-to-record fields before saving
+        const pTypeNorm = (jsonConf.type || '').toLowerCase();
+        if (pTypeNorm === 'collection' && Array.isArray(sanitizedConf.fields) && sanitizedConf.fields.length > 0) {
+            const hasColNames = sanitizedConf.fields.some(f => f.filter_colname);
+            if (hasColNames) {
+                const allCollections = await this.data.getAllCollections();
+                const nameToGuid = {};
+                for (const tc of allCollections) {
+                    try {
+                        const tc_conf = tc.getConfiguration();
+                        const tc_guid = tc.getGuid ? tc.getGuid() : null;
+                        if (tc_guid && tc_conf && tc_conf.name) nameToGuid[tc_conf.name] = tc_guid;
+                    } catch (e) { }
+                }
+                sanitizedConf.fields = sanitizedConf.fields.map(f => {
+                    if (f.filter_colname && nameToGuid[f.filter_colname]) {
+                        const { filter_colname, ...rest } = f;
+                        return { ...rest, filter_colguid: nameToGuid[f.filter_colname] };
+                    }
+                    const { filter_colname, ...rest } = f;
+                    return rest;
+                });
+            }
+        }
+
         await targetPlugin.savePlugin(sanitizedConf, jsCode);
 
         // Security: sanitize and save CSS if provided
@@ -2020,11 +2302,157 @@ class Plugin extends AppPlugin {
         return targetPlugin;
     }
 
+    async _manualCheckForUpdates(container, filterType) {
+        const btnId = filterType === 'app' ? '#pm-check-updates-global-btn' : '#pm-check-updates-col-btn';
+        const btn = container.querySelector(btnId);
+        if (!btn) return;
+
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '';
+        btn.appendChild(this.ui.createIcon('loader'));
+        btn.disabled = true;
+
+        try {
+            await this.checkForAllUpdatesInBackground();
+            this.loadPlugins(container);
+            this.ui.addToaster({
+                title: "Update Check Complete",
+                message: "Checked for new versions.",
+                autoDestroyTime: 3000,
+                dismissible: true
+            });
+        } catch (e) {
+            this.ui.addToaster({
+                title: "Update Check Failed",
+                message: e.message,
+                autoDestroyTime: 5000,
+                dismissible: true
+            });
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    }
+
+    async _updateAllAvailable(container, filterType) {
+        const btnId = filterType === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
+        const btn = container.querySelector(btnId);
+        if (!btn) return;
+
+        // Collect plugins that have known updates
+        const availableUpdates = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+        if (Object.keys(availableUpdates).length === 0) return;
+
+        let pluginsToUpdate = [];
+        try {
+            if (filterType === 'app' || filterType === 'all') {
+                pluginsToUpdate = pluginsToUpdate.concat(await this.data.getAllGlobalPlugins());
+            }
+            if (filterType === 'collection' || filterType === 'all') {
+                pluginsToUpdate = pluginsToUpdate.concat(await this.data.getAllCollections());
+            }
+        } catch (e) { }
+
+        pluginsToUpdate = pluginsToUpdate.filter(p => {
+            try {
+                return availableUpdates[p.getGuid()];
+            } catch (e) { return false; }
+        });
+
+        if (pluginsToUpdate.length === 0) return;
+
+        // Sort so that Plugins Manager (this plugin) updates LAST.
+        // Updating self terminates the plugin context immediately.
+        pluginsToUpdate.sort((a, b) => {
+            if (a.getGuid() === this.getGuid()) return 1;
+            if (b.getGuid() === this.getGuid()) return -1;
+            return 0;
+        });
+
+        if (!confirm(`Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\n\nWarning: This will overwrite any local code modifications for these plugins.`)) {
+            return;
+        }
+
+        const originalText = btn.innerText;
+        btn.innerHTML = '';
+        btn.appendChild(this.ui.createIcon('loader'));
+        btn.disabled = true;
+
+        let successCount = 0;
+        let failedNames = [];
+
+        for (const p of pluginsToUpdate) {
+            try {
+                const conf = p.getExistingCodeAndConfig().json;
+                const sourceRepo = conf.__source_repo;
+                if (!sourceRepo) continue;
+
+                // Call checkAndUpdatePlugin but bypassing UI prompts and buttons
+                const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
+
+                this._validatePluginJS(remoteJson.name, remoteJs);
+                const sanitizedConf = this._sanitizePluginConfig(remoteJson);
+
+                const isSelfUpdate = p.getGuid() === this.getGuid();
+
+                if (remoteCss) {
+                    const sanitizedCSS = this._sanitizeCSS(remoteCss);
+                    await p.saveCSS(sanitizedCSS);
+                }
+
+                // Clear from known updates
+                delete availableUpdates[p.getGuid()];
+                localStorage.setItem('pm_updates_available', JSON.stringify(availableUpdates));
+
+                if (isSelfUpdate) {
+                    const panel = this.ui.getActivePanel();
+                    if (panel) this.ui.closePanel(panel);
+
+                    const parts = [`Successfully updated: ${successCount + 1}`];
+                    if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
+                    this.ui.addToaster({
+                        title: failedNames.length > 0 ? "Update All Completed with Errors" : "Update All Successful",
+                        message: parts.join('. '),
+                        dismissible: true,
+                        autoDestroyTime: failedNames.length > 0 ? 8000 : 5000
+                    });
+
+                    localStorage.setItem('pm_self_update_pending', 'true');
+                }
+
+                await p.savePlugin(sanitizedConf, remoteJs);
+                successCount++;
+            } catch (err) {
+                console.error(err);
+                try {
+                    const conf = p.getExistingCodeAndConfig().json;
+                    failedNames.push(conf.name || 'Unknown');
+                } catch (e) { failedNames.push(p.getGuid()); }
+            }
+        }
+
+        this._autoExport();  // fire-and-forget
+        this.loadPlugins(container);
+
+        btn.innerText = originalText;
+        btn.disabled = false;
+
+        const parts = [`Successfully updated: ${successCount}`];
+        if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
+
+        this.ui.addToaster({
+            title: failedNames.length > 0 ? "Update All Completed with Errors" : "Update All Successful",
+            message: parts.join('. '),
+            dismissible: true,
+            autoDestroyTime: failedNames.length > 0 ? 8000 : 5000
+        });
+    }
+
     async showImportDialog(container, typeFilter) {
         const overlayHtml = `
             <div id="pm-import-modal" class="pm-modal">
                 <div class="pm-modal-content">
-                    <h3>Import ${typeFilter === 'app' ? 'Global Plugins' : 'Collection Plugins'}</h3>
+                    <h3>Import ${typeFilter === 'app' ? 'Plugins' : 'Collection Plugins'}</h3>
                     <p>Paste GitHub URLs (one per line), paste a JSON export array, or upload a JSON backup file.</p>
                     <textarea id="pm-import-textarea" class="pm-textarea" placeholder="https://github.com/user/repo1\nhttps://github.com/user/repo2"></textarea>
                     
@@ -2049,12 +2477,10 @@ class Plugin extends AppPlugin {
 
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
-        document.body.appendChild(tempDiv);
-        this._importModal = tempDiv; // Track for cleanup in onUnload
+        this._openModal(tempDiv);
 
         document.getElementById('pm-import-cancel').addEventListener('click', () => {
-            document.body.removeChild(tempDiv);
-            this._importModal = null;
+            this._closeModal(tempDiv);
         });
 
         // Handle file upload immediately dumping text into the textarea for preview/processing
@@ -2074,7 +2500,7 @@ class Plugin extends AppPlugin {
 
             const isFullOverride = document.getElementById('pm-import-full-override').checked;
             if (isFullOverride) {
-                if (!confirm(`WARNING: Full Override will delete existing ${typeFilter === 'app' ? 'Global Plugins' : 'Collections'} that are NOT in this backup. This cannot be undone. Are you sure?`)) {
+                if (!confirm(`WARNING: Full Override will delete existing ${typeFilter === 'app' ? 'Plugins' : 'Collections'} that are NOT in this backup. This cannot be undone. Are you sure?`)) {
                     return;
                 }
             }
@@ -2123,9 +2549,12 @@ class Plugin extends AppPlugin {
                     }
 
                     for (const p of parsed) {
-                        const pName = (p.json && p.json.name) || p.name || 'Unknown';
+                        // Merge wrapper-level type into json conf (export format puts type on wrapper, not inside json)
+                        const mergedJson = { ...p.json };
+                        if (!mergedJson.type && p.type) mergedJson.type = p.type;
+                        const pName = mergedJson.name || p.name || 'Unknown';
                         try {
-                            const result = await this.installPlugin(p.json, p.code, { interactive: !isFullOverride });
+                            const result = await this.installPlugin(mergedJson, p.code, { interactive: !isFullOverride });
                             if (result === 'skipped') { skippedNames.push(pName); }
                             else { successCount++; }
                         } catch (e) {
@@ -2135,7 +2564,7 @@ class Plugin extends AppPlugin {
                     }
                 } catch (e) {
                     this.ui.addToaster({ title: "Import Failed", message: "Invalid JSON format", autoDestroyTime: 5000 });
-                    document.body.removeChild(tempDiv);
+                    this._closeModal(tempDiv);
                     return;
                 }
             } else {
@@ -2156,8 +2585,7 @@ class Plugin extends AppPlugin {
                 }
             }
 
-            document.body.removeChild(tempDiv);
-            this._importModal = null;
+            this._closeModal(tempDiv);
             const parts = [`Installed: ${successCount}`];
             if (deletedCount > 0) parts.push(`Deleted: ${deletedCount}`);
             if (skippedNames.length > 0) parts.push(`Skipped: ${skippedNames.join(', ')}`);
@@ -2172,26 +2600,49 @@ class Plugin extends AppPlugin {
         });
     }
 
-    async checkAndUpdatePlugin(pluginObj, currentConf, sourceRepo, btnEl, container, options = {}) {
+    async checkAndUpdatePlugin(pluginObj, currentConf, sourceRepo, btnEl, container, knownUpdateVersion = null, options = {}) {
         const forceUpdate = options.forceUpdate === true;
         try {
             btnEl.innerHTML = '';
             btnEl.appendChild(this.ui.createIcon('loader'));
             btnEl.disabled = true;
 
-            const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
+            let remoteJson, remoteJs, remoteCss;
+            try {
+                const res = await this.fetchGithubRepo(sourceRepo, { sourceFiles: currentConf.__source_files });
+                remoteJson = res.json;
+                remoteJs = res.js;
+                remoteCss = res.css;
+            } catch (fetchErr) {
+                throw new Error(`Failed to fetch from ${sourceRepo}: ${fetchErr.message}`);
+            }
 
             if (!forceUpdate && remoteJson.version === currentConf.version) {
                 this.ui.addToaster({ title: "Up to date", message: `${currentConf.name} is already on the latest version.`, autoDestroyTime: 3000, dismissible: true });
+                btnEl.className = 'pm-btn pm-btn-update';
                 btnEl.innerHTML = '';
                 btnEl.appendChild(this.ui.createIcon('check'));
+
+                // Clear from known updates
+                try {
+                    const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                    delete available[pluginObj.getGuid()];
+                    localStorage.setItem('pm_updates_available', JSON.stringify(available));
+                } catch (e) { }
+
+                const badge = document.getElementById(`vbadge-${pluginObj.getGuid()}`);
+                if (badge) {
+                    badge.innerText = `v${currentConf.version}`;
+                    badge.classList.remove('update');
+                }
+
                 setTimeout(() => {
                     btnEl.innerHTML = '';
                     btnEl.appendChild(this.ui.createIcon('refresh'));
                     btnEl.title = 'Check Update';
                     btnEl.disabled = false;
                 }, 3000);
-                return;
+                return true;
             }
 
             // Update available or forceUpdate requested
@@ -2202,12 +2653,26 @@ class Plugin extends AppPlugin {
                 badge.classList.add('update');
             }
 
-            const applyUpgrade = async () => {
-                const pInfo = `${currentConf.name} from v${currentConf.version} to v${remoteJson.version}`;
-                if (confirm(`Update ${pInfo}?\n\nWarning: This will overwrite any local code modifications.`)) {
+            btnEl.innerHTML = '';
+            btnEl.appendChild(this.ui.createIcon('arrow-up'));
+            btnEl.className = 'pm-btn pm-btn-update update-btn';
+            btnEl.disabled = false;
+
+            // Update local storage so indicator persists
+            try {
+                const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                available[pluginObj.getGuid()] = remoteJson.version;
+                localStorage.setItem('pm_updates_available', JSON.stringify(available));
+            } catch (e) { }
+
+            // Overwrite click handler to apply update
+            const applyUpdate = async () => {
+                // Local modifications warning check (simple length/hash comparison could go here in future)
+                if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
                     this._validatePluginJS(remoteJson.name, remoteJs);
                     const sanitizedConf = this._sanitizePluginConfig(remoteJson);
-                    await pluginObj.savePlugin(sanitizedConf, remoteJs);
+
+                    const isSelfUpdate = pluginObj.getGuid() === this.getGuid();
 
                     if (remoteCss) {
                         const sanitizedCSS = this._sanitizeCSS(remoteCss);
@@ -2220,27 +2685,45 @@ class Plugin extends AppPlugin {
                     localStorage.setItem('pm_updates_available', JSON.stringify(updates));
                     this._updateStatusBarIcon();
 
-                    this._autoExport();  // fire-and-forget
-                    this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
-                    this.loadPlugins(container);
-                } else if (forceUpdate) {
-                    // Reset to upgrade state if cancelled during forced flow
-                    btnEl.innerHTML = '';
-                    btnEl.appendChild(this.ui.createIcon('arrow-up'));
-                    btnEl.title = 'Upgrade Plugin';
-                    btnEl.disabled = false;
+                    // Clear from known updates
+                    try {
+                        const available = JSON.parse(localStorage.getItem('pm_updates_available') || '{}');
+                        delete available[pluginObj.getGuid()];
+                        localStorage.setItem('pm_updates_available', JSON.stringify(available));
+                    } catch (e) { }
+
+                    if (isSelfUpdate) {
+                        const panel = this.ui.getActivePanel();
+                        if (panel) this.ui.closePanel(panel);
+                        localStorage.setItem('pm_self_update_pending', 'true');
+                    } else {
+                        this._autoExport();  // fire-and-forget
+                        this.ui.addToaster({ title: "Update Successful", message: `${currentConf.name} updated to v${remoteJson.version}`, autoDestroyTime: 3000, dismissible: true });
+                    }
+
+                    await pluginObj.savePlugin(sanitizedConf, remoteJs);
+
+                    if (!isSelfUpdate) {
+                        this.loadPlugins(container);
+                    } else if (forceUpdate) {
+                        // Reset to upgrade state if cancelled during forced flow
+                        btnEl.innerHTML = '';
+                        btnEl.appendChild(this.ui.createIcon('arrow-up'));
+                        btnEl.title = 'Upgrade Plugin';
+                        btnEl.disabled = false;
+                    }
+
+                    return true;
                 }
+                return false;
             };
 
-            if (forceUpdate) {
-                await applyUpgrade();
+            // If we already knew about this update, the click intent was to apply it, not just check
+            if (knownUpdateVersion) {
+                return await applyUpdate();
             } else {
-                btnEl.innerHTML = '';
-                btnEl.appendChild(this.ui.createIcon('arrow-up'));
-                btnEl.title = 'Apply Upgrade';
-                btnEl.classList.add('update-btn');
-                btnEl.disabled = false;
-                btnEl.onclick = applyUpgrade;
+                btnEl.onclick = applyUpdate;
+                return true;
             }
 
         } catch (err) {
@@ -2250,6 +2733,7 @@ class Plugin extends AppPlugin {
             btnEl.appendChild(this.ui.createIcon('refresh'));
             btnEl.title = 'Check Update';
             btnEl.disabled = false;
+            return false;
         }
     }
 
@@ -2264,7 +2748,7 @@ class Plugin extends AppPlugin {
             candidateData = allData;
         }
 
-        const typeLabel = typeFilter === 'app' ? 'Global Plugins' : 'Collection Plugins';
+        const typeLabel = typeFilter === 'app' ? 'Plugins' : 'Collection Plugins';
 
         // Build the selection list HTML
         const selectionRows = candidateData.map((d, i) => `
@@ -2324,7 +2808,7 @@ class Plugin extends AppPlugin {
 
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = overlayHtml;
-        document.body.appendChild(tempDiv);
+        this._openModal(tempDiv);
 
         // Helper: compute selected export data and refresh the textareas
         const refreshTextareas = () => {
@@ -2352,7 +2836,7 @@ class Plugin extends AppPlugin {
         });
 
         tempDiv.querySelector('#pm-export-close').addEventListener('click', () => {
-            document.body.removeChild(tempDiv);
+            this._closeModal(tempDiv);
         });
 
         // Copy actions
@@ -2390,11 +2874,7 @@ class Plugin extends AppPlugin {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            const now = new Date();
-            const pad = (n) => String(n).padStart(2, '0');
-            const prefix = typeFilter === 'collection' ? 'thymer-collections-backup' : 'thymer-plugins-backup';
-            const wsName = this._getWorkspaceName();
-            a.download = `${prefix}-${wsName}-${ts}.json`;
+            a.download = this._getBackupJsonFilename(typeFilter);
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
