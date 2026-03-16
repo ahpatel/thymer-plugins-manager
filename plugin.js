@@ -471,6 +471,15 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-export-col-btn').addEventListener('click', () => this.showExportDialog('collection'));
         container.querySelector('#pm-check-updates-col-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'collection'));
         container.querySelector('#pm-update-all-col-btn').addEventListener('click', () => this._updateAllAvailable(container, 'collection'));
+
+        // Delegated handler for external links (replaces <a target="_blank"> which is blocked in some environments)
+        container.addEventListener('click', (e) => {
+            const linkEl = e.target.closest('[data-external-url]');
+            if (linkEl) {
+                e.preventDefault();
+                this._openExternalLink(linkEl.dataset.externalUrl);
+            }
+        });
     }
 
 
@@ -645,7 +654,7 @@ class Plugin extends AppPlugin {
                         <span class="pm-badge ${badgeClass}">${badgeText}</span>
                     </h3>
                     <p>${this._escHtml(item.description)}</p>
-                    <p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(item.url)}" target="_blank" rel="noopener noreferrer">${this._escHtml(item.url)}</a></p>
+                    <p style="margin-top: 5px; font-size: 11px;"><span data-external-url="${this._escHtml(item.url)}" style="color: var(--enum-blue-bg, #3b82f6); cursor: pointer; text-decoration: underline;">${this._escHtml(item.url)}</span></p>
                 </div>
                 <div class="pm-card-actions"></div>
             `;
@@ -871,7 +880,7 @@ class Plugin extends AppPlugin {
                         <span class="pm-badge">Disabled</span>
                     </h3>
                     <p>Disabled on ${this._escHtml(disabledDate)}. Re-enable to reinstall in the official Plugins panel.</p>
-                    ${disabled.sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(disabled.sourceRepo)}" target="_blank" rel="noopener noreferrer">${this._escHtml(disabled.sourceRepo)}</a></p>` : ''}
+                    ${disabled.sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><span data-external-url="${this._escHtml(disabled.sourceRepo)}" style="color: var(--enum-blue-bg, #3b82f6); cursor: pointer; text-decoration: underline;">${this._escHtml(disabled.sourceRepo)}</span></p>` : ''}
                 </div>
                 <div class="pm-card-actions"></div>
             `;
@@ -941,7 +950,7 @@ class Plugin extends AppPlugin {
                         <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
                     </h3>
                     <p>${this._escHtml(conf.description || 'No description')}</p>
-                    ${sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><a href="${this._escHtml(sourceRepo)}" target="_blank" rel="noopener noreferrer">${this._escHtml(sourceRepo)}</a></p>` : ''}
+                    ${sourceRepo ? `<p style="margin-top: 5px; font-size: 11px;"><span data-external-url="${this._escHtml(sourceRepo)}" style="color: var(--enum-blue-bg, #3b82f6); cursor: pointer; text-decoration: underline;">${this._escHtml(sourceRepo)}</span></p>` : ''}
                 </div>
                 <div class="pm-card-actions"></div>
             `;
@@ -1065,7 +1074,7 @@ class Plugin extends AppPlugin {
             actionsContainer.appendChild(linkBtn);
 
             linkBtn.addEventListener('click', async () => {
-                const repoUrl = prompt('Enter the GitHub repo URL for this plugin:', sourceRepo || '');
+                const repoUrl = await this._showPromptModal('Link GitHub Repository', 'Enter the GitHub repo URL for this plugin:', sourceRepo || '');
                 if (repoUrl === null) return; // cancelled
                 if (repoUrl === '') {
                     // Remove link
@@ -1161,7 +1170,7 @@ class Plugin extends AppPlugin {
                     </h3>
                     <p style="font-size: 12px; color: var(--pm-text-muted);">
                         ${theme.css.length} chars · Added ${new Date(theme.date).toLocaleDateString()}
-                        ${theme.source ? ` · <a href="${this._escHtml(theme.source)}" target="_blank" rel="noopener noreferrer">${this._escHtml(theme.source)}</a>` : ''}
+                        ${theme.source ? ` · <span data-external-url="${this._escHtml(theme.source)}" style="color: var(--enum-blue-bg, #3b82f6); cursor: pointer; text-decoration: underline;">${this._escHtml(theme.source)}</span>` : ''}
                     </p>
                 </div>
                 <div class="pm-card-actions"></div>
@@ -1210,7 +1219,7 @@ class Plugin extends AppPlugin {
     }
 
     async _addThemeFromGithub(container) {
-        const url = prompt('Enter the GitHub repo URL for the theme:');
+        const url = await this._showPromptModal('Add Theme from GitHub', 'Enter the GitHub repo URL for the theme:');
         if (!url) return;
 
         this.ui.addToaster({ title: 'Fetching theme CSS...', autoDestroyTime: 2000, dismissible: true });
@@ -1218,7 +1227,7 @@ class Plugin extends AppPlugin {
         try {
             const cssText = this._sanitizeCSS(await this._fetchThemeCSS(url));
             const { owner, repo } = this._parseGithubUrl(url);
-            const name = prompt('Name this theme:', repo || 'My Theme');
+            const name = await this._showPromptModal('Name This Theme', 'Enter a name for this theme:', repo || 'My Theme');
             if (!name) return;
 
             this._savedThemes.push({
@@ -1250,9 +1259,9 @@ class Plugin extends AppPlugin {
                 const { repo } = this._parseGithubUrl(sourceUrl);
                 if (repo) defaultName = repo;
                 repoLinkHtml = `<p style="font-size: 13px; margin-bottom: 10px;">
-                                    <a href="${this._escHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">
+                                    <span data-external-url="${this._escHtml(sourceUrl)}" style="color: var(--enum-blue-bg, #3b82f6); cursor: pointer; text-decoration: underline;">
                                         Open repository in new tab to find the CSS
-                                    </a>
+                                    </span>
                                 </p>`;
             } catch (e) { /* ignore parse error */ }
         }
@@ -1311,9 +1320,9 @@ class Plugin extends AppPlugin {
         let repoLinkHtml = '';
         if (sourceUrl) {
             repoLinkHtml = `<p style="font-size: 13px; margin-bottom: 10px;">
-                                <a href="${this._escHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">
+                                <span data-external-url="${this._escHtml(sourceUrl)}" style="color: var(--enum-blue-bg, #3b82f6); cursor: pointer; text-decoration: underline;">
                                     Open repository in new tab
-                                </a>
+                                </span>
                             </p>`;
         }
 
@@ -1369,6 +1378,13 @@ class Plugin extends AppPlugin {
         
         // Close modal when clicking outside its content area (on the background overlay)
         el.addEventListener('click', (e) => {
+            // Handle external link clicks inside modals
+            const linkEl = e.target.closest('[data-external-url]');
+            if (linkEl) {
+                e.preventDefault();
+                this._openExternalLink(linkEl.dataset.externalUrl);
+                return;
+            }
             if (e.target.classList.contains('pm-modal')) {
                 this._closeModal(el);
             }
@@ -1384,6 +1400,56 @@ class Plugin extends AppPlugin {
             const idx = this._activeModals.indexOf(el);
             if (idx !== -1) this._activeModals.splice(idx, 1);
         }
+    }
+
+    /**
+     * Custom prompt modal that replaces native prompt() which is blocked in
+     * embedded/WebView/Electron environments.
+     * @param {string} title - Dialog title
+     * @param {string} message - Descriptive text shown above the input
+     * @param {string} [defaultValue=''] - Pre-filled value for the input
+     * @returns {Promise<string|null>} The user's input, or null if cancelled
+     */
+    _showPromptModal(title, message, defaultValue = '') {
+        return new Promise(resolve => {
+            const overlayHtml = `
+                <div class="pm-modal">
+                    <div class="pm-modal-content">
+                        <h3>${this._escHtml(title)}</h3>
+                        <p style="font-size: 13px; color: var(--pm-text-muted); margin-bottom: 10px;">${this._escHtml(message)}</p>
+                        <input type="text" id="pm-prompt-input" class="pm-input" value="${this._escHtml(defaultValue)}" placeholder="" autocomplete="off" />
+                        <div style="margin-top: 15px; display: flex; justify-content: flex-end; gap: 10px;">
+                            <button class="pm-btn" id="pm-prompt-cancel">Cancel</button>
+                            <button class="pm-btn primary" id="pm-prompt-ok">OK</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = overlayHtml;
+            this._openModal(tempDiv);
+
+            const input = tempDiv.querySelector('#pm-prompt-input');
+            setTimeout(() => { input.focus(); input.select(); }, 50);
+
+            const close = (value) => {
+                this._closeModal(tempDiv);
+                resolve(value);
+            };
+
+            tempDiv.querySelector('#pm-prompt-cancel').addEventListener('click', () => close(null));
+            tempDiv.querySelector('#pm-prompt-ok').addEventListener('click', () => close(input.value.trim()));
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') close(input.value.trim());
+                if (e.key === 'Escape') close(null);
+            });
+        });
+    }
+
+    /** Open an external URL in a new browser tab/window. */
+    _openExternalLink(url) {
+        if (url) window.open(url, '_blank', 'noopener,noreferrer');
     }
 
     async _exportAllThemes() {
@@ -2172,7 +2238,8 @@ class Plugin extends AppPlugin {
     // --- Core Features ---
 
     async showInstallDialog(container, typeFilter) {
-        const url = prompt(`Enter GitHub URL for the ${typeFilter === 'app' ? 'Plugin' : 'Collection Plugin'} (e.g. https://github.com/user/repo):`);
+        const label = typeFilter === 'app' ? 'Plugin' : 'Collection Plugin';
+        const url = await this._showPromptModal(`Install ${label}`, `Enter GitHub URL for the ${label} (e.g. https://github.com/user/repo):`);
         if (!url) return;
 
         try {
