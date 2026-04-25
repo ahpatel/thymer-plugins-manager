@@ -10,13 +10,54 @@
     --pm-input-bg: var(--input-bg-color, var(--theme-background-primary, #1e1e1e));
     --pm-modal-bg: var(--modal-background, var(--theme-background-secondary, #151515));
     --pm-overlay-bg: var(--modal-overlay-background, rgba(0, 0, 0, 0.68));
-    --pm-shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.18);
+    /* Theme-aware shadow: defer to Thymer's card shadow when present, else a soft layered shadow */
+    --pm-shadow-card: var(--cards-shadow, 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 6px rgba(0, 0, 0, 0.06));
+    --pm-shadow-modal: var(--modal-shadow, 0 10px 30px rgba(0, 0, 0, 0.18));
+    /* Accent + semantic colors. Use *-fg tokens for text-on-card; *-bg for fills only. */
     --pm-accent: var(--enum-blue-bg, var(--color-accent, #3b82f6));
-    --pm-accent-contrast: var(--enum-blue-text, #ffffff);
+    --pm-accent-contrast: var(--enum-blue-fg, var(--enum-blue-text, #ffffff));
+    --pm-link: var(--theme-link, var(--enum-blue-fg, var(--pm-accent)));
     --pm-success: var(--enum-green-bg, #10b981);
+    --pm-success-fg: var(--enum-green-fg, var(--pm-success));
     --pm-warning: var(--enum-orange-bg, #f59e0b);
+    --pm-warning-fg: var(--enum-orange-fg, var(--pm-warning));
     --pm-danger: var(--enum-red-bg, #ef4444);
+    --pm-danger-fg: var(--enum-red-fg, var(--pm-danger));
     --pm-update: var(--enum-purple-bg, #8b5cf6);
+    --pm-update-fg: var(--enum-purple-fg, var(--pm-update));
+    --pm-focus-ring: var(--enum-blue-border, var(--pm-accent));
+}
+
+.pm-hidden {
+    display: none !important;
+}
+
+/*
+ * Instant tooltip rendered to <body>. Uses the same theme tokens as the panel
+ * even though it lives outside .pm-container.
+ */
+.pm-tooltip {
+    position: fixed;
+    z-index: 10000;
+    pointer-events: none;
+    background: var(--theme-background-tertiary, var(--cards-hover-bg, #2a2a2a));
+    color: var(--theme-text-primary, #fff);
+    border: 1px solid var(--cards-border-color, var(--theme-border, #333));
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: var(--font-family, inherit);
+    line-height: 1.3;
+    max-width: 280px;
+    white-space: normal;
+    box-shadow: var(--cards-shadow, 0 2px 8px rgba(0, 0, 0, 0.18));
+    /* small fade-in so showing isn't jarring, but still effectively instant */
+    animation: pm-tooltip-fade 80ms ease-out;
+}
+
+@keyframes pm-tooltip-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .pm-container {
@@ -31,18 +72,48 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
     margin-bottom: 20px;
 }
 
 .pm-header h1 {
     margin: 0;
     font-size: 24px;
+    line-height: 1.2;
+    min-width: 0;
+}
+
+.pm-btn-check-updates {
+    margin-left: auto;
+    gap: 6px;
+}
+
+.pm-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    font-family: 'tabler-icons', inherit;
+    font-size: 14px;
 }
 
 .pm-tabs {
     display: flex;
     border-bottom: 1px solid var(--pm-border-default);
     margin-bottom: 20px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--pm-border-default) transparent;
+}
+
+.pm-tabs::-webkit-scrollbar {
+    height: 6px;
+}
+
+.pm-tabs::-webkit-scrollbar-thumb {
+    background: var(--pm-border-default);
+    border-radius: 3px;
 }
 
 .pm-tab {
@@ -52,6 +123,8 @@
     font-weight: 500;
     color: var(--pm-text-muted);
     white-space: nowrap;
+    /* Don't let flex shrink the tab below its label width — .pm-tabs scrolls instead. */
+    flex-shrink: 0;
 }
 
 .pm-tab:hover {
@@ -100,11 +173,17 @@
     display: grid;
     grid-template-columns: 1fr;
     gap: 15px;
+    /* Allow grid cells to shrink below their content's intrinsic width so cards never overflow the panel. */
+    min-width: 0;
 }
 
-/* Wide panel: expand to multi-column cards */
+.pm-list-container > * {
+    min-width: 0;
+}
+
+/* Wide panel: expand to multi-column cards. Use a clamp so cards reflow gracefully. */
 .pm-container.wide .pm-list-container {
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
 }
 
 .pm-card {
@@ -118,24 +197,38 @@
     align-items: flex-start;
     height: auto;
     min-height: auto;
-    box-shadow: var(--pm-shadow-lg);
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    box-shadow: var(--pm-shadow-card);
+    overflow: hidden;
 }
 
 .pm-card-info {
     flex: 1;
     width: 100%;
+    min-width: 0;
     overflow: hidden;
 }
 
+/*
+ * Title row: keep title text on one line with ellipsis, but allow trailing
+ * badges to wrap to a new line if the card is too narrow to fit them inline.
+ */
 .pm-card-info h3 {
     margin: 0 0 5px 0;
     font-size: 16px;
     display: flex;
     align-items: center;
-    gap: 8px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.pm-card-info h3 .pm-badge {
+    flex-shrink: 0;
 }
 
 .pm-card-info p {
@@ -149,11 +242,48 @@
     overflow: hidden;
 }
 
+/*
+ * Source URL row inside a card. Override the parent <p>'s -webkit-box clamp
+ * so long URLs wrap normally instead of forcing the card to overflow.
+ */
+.pm-card-url-row {
+    margin-top: 5px !important;
+    font-size: 11px;
+    display: block !important;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+}
+
+.pm-card-url {
+    color: var(--pm-link);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--pm-link) 50%, transparent);
+    text-underline-offset: 2px;
+    word-break: break-all;
+}
+
+.pm-card-url:hover {
+    text-decoration-color: var(--pm-link);
+    color: var(--pm-link);
+}
+
+/* Generic small caption text used for card metadata. */
+.pm-meta-text {
+    margin: 8px 0 0 !important;
+    font-size: 12px;
+    color: var(--pm-text-muted);
+}
+
 .pm-card-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     width: 100%;
+    min-width: 0;
     justify-content: flex-start;
     margin-top: 10px;
 }
@@ -169,10 +299,31 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 6px;
+    font-family: inherit;
+    transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .pm-btn:hover {
     background: var(--pm-bg-hover);
+}
+
+/* Suppress default focus styling; use a clean ring on keyboard focus only. */
+.pm-btn:focus,
+.pm-tab:focus,
+.pm-filter-chip:focus,
+.pm-input:focus,
+.pm-textarea:focus {
+    outline: none;
+}
+
+.pm-btn:focus-visible,
+.pm-tab:focus-visible,
+.pm-filter-chip:focus-visible,
+.pm-input:focus-visible,
+.pm-textarea:focus-visible {
+    outline: 2px solid var(--pm-focus-ring);
+    outline-offset: 2px;
 }
 
 .pm-btn.primary {
@@ -182,39 +333,43 @@
 }
 
 .pm-btn.primary:hover {
-    filter: brightness(.94);
+    background: color-mix(in srgb, var(--pm-accent) 88%, #000 12%);
+    border-color: color-mix(in srgb, var(--pm-accent) 88%, #000 12%);
 }
 
 .pm-btn.danger {
-    color: var(--pm-text-muted);
-    border-color: var(--pm-border-default);
+    color: var(--pm-danger-fg);
+    border-color: color-mix(in srgb, var(--pm-danger) 35%, var(--pm-border-default));
     background: transparent;
 }
 
 .pm-btn.danger:hover {
-    background: var(--pm-danger);
-    color: #fff;
-    border-color: var(--pm-danger);
+    background: color-mix(in srgb, var(--pm-danger) 16%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-danger) 50%, var(--pm-border-default));
+    color: var(--pm-danger-fg);
 }
 
 .pm-btn.pm-btn-update {
-    background: color-mix(in srgb, var(--pm-update) 14%, var(--pm-bg-default));
+    background: color-mix(in srgb, var(--pm-update) 12%, var(--pm-bg-default));
     color: var(--pm-text-color);
-    border-color: color-mix(in srgb, var(--pm-update) 40%, var(--pm-border-default));
+    border-color: color-mix(in srgb, var(--pm-update) 35%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-update:hover {
     background: color-mix(in srgb, var(--pm-update) 22%, var(--pm-bg-hover));
+    border-color: color-mix(in srgb, var(--pm-update) 50%, var(--pm-border-default));
 }
 
+/* Reinstall: subtle success-tinted action, not a saturated fill. */
 .pm-btn.pm-btn-reinstall {
-    background: var(--pm-success);
-    color: #fff;
-    border-color: var(--pm-success);
+    background: color-mix(in srgb, var(--pm-success) 14%, var(--pm-bg-default));
+    color: var(--pm-text-color);
+    border-color: color-mix(in srgb, var(--pm-success) 40%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-reinstall:hover {
-    filter: brightness(.6);
+    background: color-mix(in srgb, var(--pm-success) 26%, var(--pm-bg-hover));
+    border-color: color-mix(in srgb, var(--pm-success) 55%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-delete {
@@ -224,9 +379,9 @@
 }
 
 .pm-btn.pm-btn-delete:hover {
-    background: var(--pm-danger);
-    color: #fff;
-    border-color: var(--pm-danger);
+    background: color-mix(in srgb, var(--pm-danger) 16%, var(--pm-bg-default));
+    color: var(--pm-danger-fg);
+    border-color: color-mix(in srgb, var(--pm-danger) 50%, var(--pm-border-default));
 }
 
 .pm-state-icon {
@@ -235,20 +390,24 @@
     font-weight: 700;
 }
 
+/* Disable button (currently enabled): outlined with success-colored dot. */
 .pm-btn.pm-btn-disable {
-    background: var(--pm-success);
-    color: #fff;
-    border-color: var(--pm-success);
+    background: var(--pm-bg-default);
+    color: var(--pm-text-color);
+    border-color: color-mix(in srgb, var(--pm-success) 35%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-disable .pm-state-icon {
-    color: white;
+    color: var(--pm-success-fg);
+    text-shadow: 0 0 0 currentColor;
 }
 
 .pm-btn.pm-btn-disable:hover {
-    filter: brightness(.85);
+    background: color-mix(in srgb, var(--pm-success) 14%, var(--pm-bg-hover));
+    border-color: color-mix(in srgb, var(--pm-success) 50%, var(--pm-border-default));
 }
 
+/* Enable button (currently disabled): muted outlined; warning tint on hover. */
 .pm-btn.pm-btn-enable {
     color: var(--pm-text-muted);
     border-color: var(--pm-border-default);
@@ -260,9 +419,13 @@
 }
 
 .pm-btn.pm-btn-enable:hover {
-    background: var(--pm-warning);
-    color: #fff;
-    border-color: var(--pm-warning);
+    background: color-mix(in srgb, var(--pm-warning) 16%, var(--pm-bg-default));
+    color: var(--pm-warning-fg);
+    border-color: color-mix(in srgb, var(--pm-warning) 50%, var(--pm-border-default));
+}
+
+.pm-btn.pm-btn-enable:hover .pm-state-icon {
+    color: var(--pm-warning-fg);
 }
 
 .pm-card.pm-card-disabled {
@@ -282,6 +445,34 @@
     display: block;
     margin-bottom: 5px;
     font-weight: 500;
+}
+
+.pm-input-group-flush {
+    margin-bottom: 0;
+}
+
+.pm-settings-card {
+    height: auto;
+    gap: 18px;
+}
+
+.pm-settings-form {
+    width: 100%;
+    margin: 0;
+}
+
+.pm-settings-help-tight {
+    margin: 8px 0;
+}
+
+.pm-settings-help-flush {
+    margin: 0;
+}
+
+.pm-settings-hint {
+    margin: 8px 0 0;
+    font-size: 11px;
+    opacity: 0.8;
 }
 
 .pm-input {
@@ -317,14 +508,15 @@
 }
 
 .pm-badge.update {
-    background: var(--pm-update);
-    color: #fff;
-    border-color: var(--pm-update);
+    background: color-mix(in srgb, var(--pm-update) 18%, var(--pm-bg-default));
+    color: var(--pm-update-fg);
+    border-color: color-mix(in srgb, var(--pm-update) 45%, var(--pm-border-default));
+    font-weight: 600;
 }
 
 .pm-card-upgradeable {
     border-color: color-mix(in srgb, var(--pm-update) 45%, var(--pm-border-default));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-update) 15%, transparent), var(--pm-shadow-lg);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-update) 15%, transparent), var(--pm-shadow-card);
     position: relative;
     overflow: hidden;
 }
@@ -428,15 +620,16 @@
     width: 500px;
     max-width: 90%;
     border: 1px solid var(--pm-border-default);
-    box-shadow: var(--pm-shadow-lg);
+    box-shadow: var(--pm-shadow-modal);
 }
 
 .pm-export-content {
     width: 600px;
 }
 
-.pm-settings-card {
-    gap: 18px;
+.pm-modal-link-row {
+    font-size: 13px;
+    margin-bottom: 10px;
 }
 
 .pm-settings-form {
@@ -532,26 +725,54 @@
     font-size: 10px;
 }
 
-/* === Responsive: narrow panels === */
+/* === Responsive === */
 
-/* Tab icon/label toggle helpers */
+/*
+ * Default (wide enough): show text labels in tabs. Icons stay hidden.
+ * The horizontal scroll on .pm-tabs handles edge-case overflow gracefully.
+ */
 .pm-tab .pm-tab-icon {
     display: none;
-    font-size: 16px;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
 }
 
 .pm-tab .pm-tab-label {
     display: inline;
 }
 
-/* Single-column override for narrow panels */
-.pm-container.narrow .pm-list-container {
-    grid-template-columns: 1fr;
+/* Header button: hide icon when label is shown. */
+.pm-btn-check-updates .pm-btn-icon {
+    display: none;
 }
 
-/* Narrow panel: shorter tab padding, icon-only labels */
+/* Compact panels (<760px): collapse the header CTA to its icon to make room. */
+.pm-container.compact .pm-btn-check-updates .pm-btn-label {
+    display: none;
+}
+
+.pm-container.compact .pm-btn-check-updates .pm-btn-icon {
+    display: inline-flex;
+}
+
+.pm-container.compact .pm-header h1 {
+    font-size: 20px;
+}
+
+/* Compact panels: tighter tab padding so all 5 labels fit before scroll kicks in. */
+.pm-container.compact .pm-tab {
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+/*
+ * Narrow panels (<520px): collapse tabs to two-tone icons. Active tab gets the
+ * accent color while inactive tabs use the muted text color, giving a clean
+ * two-tone interaction with Thymer's native Tabler icons.
+ */
 .pm-container.narrow .pm-tab {
-    padding: 8px 10px;
+    padding: 10px 12px;
 }
 
 .pm-container.narrow .pm-tab .pm-tab-label {
@@ -560,7 +781,30 @@
 
 .pm-container.narrow .pm-tab .pm-tab-icon {
     display: inline-flex;
-    line-height: 1;
+    color: var(--pm-text-muted);
+    transition: color 0.12s ease;
+}
+
+.pm-container.narrow .pm-tab:hover .pm-tab-icon {
+    color: var(--pm-text-color);
+}
+
+.pm-container.narrow .pm-tab.active .pm-tab-icon {
+    color: var(--pm-link);
+}
+
+/* Make Tabler icon SVGs scale with the surrounding text. */
+.pm-tab-icon svg,
+.pm-btn-icon svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    fill: none;
+}
+
+/* Single-column override for narrow panels */
+.pm-container.narrow .pm-list-container {
+    grid-template-columns: 1fr;
 }
 
 /* Narrow panel: tighter action bar */
@@ -584,4 +828,21 @@
 .pm-container.narrow .pm-btn {
     padding: 5px 8px;
     font-size: 12px;
+}
+
+/* Narrow panel: tighter card padding + smaller title so content has room. */
+.pm-container.narrow .pm-card {
+    padding: 12px;
+}
+
+.pm-container.narrow .pm-card-info h3 {
+    font-size: 14px;
+}
+
+/* The diagonal UPDATE ribbon competes with content on tiny cards; downscale. */
+.pm-container.narrow .pm-card-upgradeable::after {
+    font-size: 8px;
+    width: 80px;
+    right: -24px;
+    top: 5px;
 }
