@@ -330,14 +330,15 @@
 }
 
 .pm-btn.primary {
-    background: var(--pm-accent);
-    color: var(--pm-accent-contrast);
-    border-color: var(--pm-accent);
+    background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-bg-default));
+    color: var(--pm-link);
+    border-color: color-mix(in srgb, var(--pm-accent) 40%, var(--pm-border-default));
+    font-weight: 600;
 }
 
 .pm-btn.primary:hover {
-    background: color-mix(in srgb, var(--pm-accent) 88%, #000 12%);
-    border-color: color-mix(in srgb, var(--pm-accent) 88%, #000 12%);
+    background: color-mix(in srgb, var(--pm-accent) 22%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-accent) 60%, var(--pm-border-default));
 }
 
 .pm-btn.danger {
