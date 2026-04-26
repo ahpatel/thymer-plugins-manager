@@ -14,9 +14,9 @@
     --pm-shadow-card: var(--cards-shadow, 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 6px rgba(0, 0, 0, 0.06));
     --pm-shadow-modal: var(--modal-shadow, 0 10px 30px rgba(0, 0, 0, 0.18));
     /* Accent + semantic colors. Use *-fg tokens for text-on-card; *-bg for fills only. */
-    --pm-accent: var(--enum-blue-bg, var(--color-accent, #3b82f6));
+    --pm-accent: var(--theme-link, var(--enum-blue-bg, var(--color-accent, #3b82f6)));
     --pm-accent-contrast: var(--enum-blue-fg, var(--enum-blue-text, #ffffff));
-    --pm-link: var(--theme-link, var(--enum-blue-fg, var(--pm-accent)));
+    --pm-link: var(--theme-link, var(--pm-accent));
     --pm-success: var(--enum-green-bg, #10b981);
     --pm-success-fg: var(--enum-green-fg, var(--pm-success));
     --pm-warning: var(--enum-orange-bg, #f59e0b);
@@ -25,7 +25,7 @@
     --pm-danger-fg: var(--enum-red-fg, var(--pm-danger));
     --pm-update: var(--enum-purple-bg, #8b5cf6);
     --pm-update-fg: var(--enum-purple-fg, var(--pm-update));
-    --pm-focus-ring: var(--enum-blue-border, var(--pm-accent));
+    --pm-focus-ring: var(--theme-link, var(--enum-blue-border, var(--pm-accent)));
 }
 
 .pm-hidden {
