@@ -388,48 +388,64 @@
     border-color: color-mix(in srgb, var(--pm-danger) 50%, var(--pm-border-default));
 }
 
-.pm-state-icon {
-    font-size: 13px;
-    line-height: 1;
-    font-weight: 700;
+/* On/off toggle switch (replaces the old status-dot buttons). ON = enabled. */
+.pm-switch {
+    --pm-switch-w: 34px;
+    --pm-switch-h: 20px;
+    --pm-switch-pad: 2px;
+    position: relative;
+    flex: 0 0 auto;
+    width: var(--pm-switch-w);
+    height: var(--pm-switch-h);
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--pm-border-default) 80%, transparent);
+    border-radius: 999px;
+    background: var(--pm-bg-subtle);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    -webkit-appearance: none;
+    appearance: none;
 }
 
-/* Disable button (currently enabled): outlined with success-colored dot. */
-.pm-btn.pm-btn-disable {
-    background: var(--pm-bg-default);
-    color: var(--pm-text-color);
-    border-color: color-mix(in srgb, var(--pm-success) 35%, var(--pm-border-default));
+.pm-switch-thumb {
+    position: absolute;
+    top: 50%;
+    left: var(--pm-switch-pad);
+    width: calc(var(--pm-switch-h) - 2 * var(--pm-switch-pad));
+    height: calc(var(--pm-switch-h) - 2 * var(--pm-switch-pad));
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+    transform: translate(0, -50%);
+    transition: transform 0.15s ease;
 }
 
-.pm-btn.pm-btn-disable .pm-state-icon {
-    color: var(--pm-success-fg);
-    text-shadow: 0 0 0 currentColor;
+.pm-switch[aria-checked="true"] {
+    background: var(--pm-success);
+    border-color: color-mix(in srgb, var(--pm-success) 60%, transparent);
 }
 
-.pm-btn.pm-btn-disable:hover {
-    background: color-mix(in srgb, var(--pm-success) 14%, var(--pm-bg-hover));
-    border-color: color-mix(in srgb, var(--pm-success) 50%, var(--pm-border-default));
+.pm-switch[aria-checked="true"] .pm-switch-thumb {
+    transform: translate(calc(var(--pm-switch-w) - var(--pm-switch-h)), -50%);
 }
 
-/* Enable button (currently disabled): muted outlined; warning tint on hover. */
-.pm-btn.pm-btn-enable {
-    color: var(--pm-text-muted);
-    border-color: var(--pm-border-default);
-    background: transparent;
+.pm-switch:not(:disabled):hover {
+    border-color: color-mix(in srgb, var(--pm-accent) 45%, var(--pm-border-default));
 }
 
-.pm-btn.pm-btn-enable .pm-state-icon {
-    color: var(--pm-text-muted);
+.pm-switch:focus-visible {
+    outline: 2px solid var(--pm-focus-ring);
+    outline-offset: 2px;
 }
 
-.pm-btn.pm-btn-enable:hover {
-    background: color-mix(in srgb, var(--pm-warning) 16%, var(--pm-bg-default));
-    color: var(--pm-warning-fg);
-    border-color: color-mix(in srgb, var(--pm-warning) 50%, var(--pm-border-default));
+.pm-switch:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
-.pm-btn.pm-btn-enable:hover .pm-state-icon {
-    color: var(--pm-warning-fg);
+.pm-switch[aria-busy="true"] {
+    cursor: progress;
+    opacity: 0.7;
 }
 
 .pm-card.pm-card-disabled {
@@ -437,8 +453,34 @@
     opacity: 0.9;
 }
 
-.pm-btn:disabled .pm-state-icon {
-    opacity: 0.5;
+/* Leading plugin icon in each card title. */
+.pm-card-icon {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    color: var(--pm-text-muted);
+}
+
+.pm-card-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Header actions cluster + Safe Mode master switch. */
+.pm-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.pm-safe-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--pm-text-muted);
+    white-space: nowrap;
 }
 
 .pm-input-group {
