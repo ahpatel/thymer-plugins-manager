@@ -284,6 +284,7 @@
 .pm-card-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     width: 100%;
     min-width: 0;
@@ -390,11 +391,12 @@
 
 /* On/off toggle switch (replaces the old status-dot buttons). ON = enabled. */
 .pm-switch {
-    --pm-switch-w: 34px;
-    --pm-switch-h: 20px;
-    --pm-switch-pad: 2px;
+    --pm-switch-w: 42px;
+    --pm-switch-h: 24px;
+    --pm-switch-pad: 3px;
     position: relative;
     flex: 0 0 auto;
+    align-self: center;
     width: var(--pm-switch-w);
     height: var(--pm-switch-h);
     padding: 0;
@@ -421,8 +423,8 @@
 }
 
 .pm-switch[aria-checked="true"] {
-    background: var(--pm-success);
-    border-color: color-mix(in srgb, var(--pm-success) 60%, transparent);
+    background: var(--pm-success-fg, #22c55e);
+    border-color: color-mix(in srgb, var(--pm-success-fg, #22c55e) 60%, transparent);
 }
 
 .pm-switch[aria-checked="true"] .pm-switch-thumb {
