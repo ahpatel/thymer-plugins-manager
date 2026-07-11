@@ -1,5 +1,12 @@
+/*
+ * .pm-tokens declares the design tokens WITHOUT any layout. Surfaces appended to <body>
+ * (popovers, modal wrappers) must use it rather than .pm-container — that class also carries
+ * the panel's geometry (width: 100%), which a position:fixed popover would inherit as 100%
+ * of the VIEWPORT, blowing it out to a full-width bar.
+ */
 .pm-container,
-.pm-modal {
+.pm-modal,
+.pm-tokens {
     /* Map to Thymer's standard theme variables with dark mode fallbacks */
     --pm-bg-default: var(--cards-bg, var(--color-bg-600, light-dark(#f9f9f9, #1e1e1e)));
     --pm-bg-hover: var(--cards-hover-bg, var(--hover-subtle, light-dark(#f0f0f0, #2a2a2a)));
@@ -9,7 +16,7 @@
     --pm-text-muted: var(--text-subtle, var(--ed-gray-text, light-dark(#666, #999)));
     --pm-input-bg: var(--color-bg-600, light-dark(#ffffff, #1e1e1e));
     --pm-modal-bg: var(--modal-opaque-bg-color, var(--cards-bg, var(--color-bg-600, light-dark(#ffffff, #151515))));
-    --pm-overlay-bg: rgba(0, 0, 0, 0.55);
+    --pm-overlay-bg: rgba(0, 0, 0, 0.68);
     /* Theme-aware shadow: defer to Thymer's card shadow when present, else a soft layered shadow */
     --pm-shadow-card: var(--cards-shadow, 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 6px rgba(0, 0, 0, 0.06));
     --pm-shadow-modal: var(--modal-shadow, 0 10px 30px rgba(0, 0, 0, 0.18));
@@ -62,29 +69,112 @@
     to { opacity: 1; }
 }
 
+/*
+ * ALWAYS full width of the available container. No max-width cap and no auto-centering:
+ * the layout must never change width between tabs, filters or any other setting. The
+ * scrollbar gutter is pinned here and on the real scroll host (see bindEvents) so a short
+ * list losing its scrollbar can't hand width back and resize the interface.
+ */
 .pm-container {
     padding: 20px;
-    max-width: 900px;
-    margin: 0 auto;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    box-sizing: border-box;
     font-family: var(--font-family, inherit);
     color: var(--pm-text-color);
     color-scheme: light dark;
+    scrollbar-gutter: stable;
 }
 
+/*
+ * Header mirrors the shared settings-ui plugin header: a large icon in a soft-background
+ * box, the title beneath it, and the version + GitHub link beneath that. Only those pieces —
+ * none of the rest of that component's chrome.
+ */
 .pm-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-start;
     margin-bottom: 20px;
+}
+
+/* Soft-background box around the icon. */
+.pm-header-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    margin: 0 0 12px;
+    background: var(--pm-bg-hover);
+    border-radius: 8px;
+}
+
+.pm-header-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    font-family: 'tabler-icons', inherit;
+    font-size: 34px;
+    line-height: 1;
+    color: var(--pm-text-color);
+}
+
+.pm-header-icon svg {
+    width: 34px;
+    height: 34px;
+}
+
+/* Title with the version pill sitting to its right. */
+.pm-header-titlerow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
 .pm-header h1 {
     margin: 0;
-    font-size: 24px;
+    font-size: 22px;
+    font-weight: 600;
     line-height: 1.2;
     min-width: 0;
+}
+
+/* Version + GitHub link, under the title — kept as a pill with a hover lift. */
+.pm-header-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    color: var(--pm-text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border: 1px solid var(--pm-border-default);
+    border-radius: 20px;
+    white-space: nowrap;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.pm-header-meta:hover {
+    color: var(--pm-link);
+    border-color: color-mix(in srgb, var(--pm-link) 45%, var(--pm-border-default));
+    background: var(--pm-bg-hover);
+}
+
+.pm-header-meta .pm-gh-mark {
+    color: inherit;
+    width: 13px;
+    height: 13px;
+    vertical-align: 0;
+}
+
+.pm-header-meta:focus-visible {
+    outline: 2px solid var(--pm-focus-ring);
+    outline-offset: 2px;
 }
 
 .pm-btn-check-updates {
@@ -172,9 +262,16 @@
     flex: 0 1 auto;
 }
 
+/*
+ * Column count is a pure function of the available width — deliberately NOT gated on the
+ * JS-toggled .wide class. That gate flipped the grid between a single full-width column and
+ * multi-column, so any small width change (a tab with a shorter list losing its scrollbar)
+ * made every card visibly shrink. auto-fill + minmax reflows gracefully instead, and every
+ * tab lays out identically at the same width.
+ */
 .pm-list-container {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
     gap: 15px;
     /* Allow grid cells to shrink below their content's intrinsic width so cards never overflow the panel. */
     min-width: 0;
@@ -184,9 +281,72 @@
     min-width: 0;
 }
 
-/* Wide panel: expand to multi-column cards. Use a clamp so cards reflow gracefully. */
-.pm-container.wide .pm-list-container {
-    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+/*
+ * Compact "List" view: one full-width row per plugin. Same type scale and content, just
+ * laid out horizontally — icon far left (smaller), text in the middle, actions on the right.
+ */
+.pm-list-container.pm-view-list {
+    grid-template-columns: 1fr;
+    gap: 8px;
+}
+
+.pm-view-list .pm-card {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 14px;
+    padding: 10px 14px;
+}
+
+.pm-view-list .pm-card-iconrow {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    margin-bottom: 0;
+    flex: 0 0 auto;
+}
+
+.pm-view-list .pm-card-icon {
+    font-size: 22px;
+}
+
+.pm-view-list .pm-card-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+.pm-view-list .pm-card-info {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.pm-view-list .pm-card-info h3 {
+    margin-bottom: 2px;
+}
+
+.pm-view-list .pm-card-attr {
+    margin-bottom: 2px;
+}
+
+/* Single-line description; the long repo URL is dropped (the GitHub mark still marks source). */
+.pm-view-list .pm-card-info p {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+}
+
+.pm-view-list .pm-card-url-row {
+    display: none !important;
+}
+
+.pm-view-list .pm-card-actions {
+    width: auto;
+    flex: 0 0 auto;
+    margin-top: 0;
+    flex-wrap: nowrap;
+}
+
+.pm-view-list .pm-color-btn {
+    margin-left: 4px;
 }
 
 .pm-card {
@@ -343,6 +503,7 @@
 .pm-btn:focus,
 .pm-tab:focus,
 .pm-filter-chip:focus,
+.pm-chip:focus,
 .pm-input:focus,
 .pm-textarea:focus {
     outline: none;
@@ -351,6 +512,7 @@
 .pm-btn:focus-visible,
 .pm-tab:focus-visible,
 .pm-filter-chip:focus-visible,
+.pm-chip:focus-visible,
 .pm-input:focus-visible,
 .pm-textarea:focus-visible {
     outline: 2px solid var(--pm-focus-ring);
@@ -449,9 +611,11 @@
     transition: transform 0.15s ease;
 }
 
+/* ON state. The theme's green token renders washed-out on dark surfaces; this is a muted,
+   deeper green — saturated enough to read clearly without shouting. */
 .pm-switch[aria-checked="true"] {
-    background: var(--pm-success-fg, #22c55e);
-    border-color: color-mix(in srgb, var(--pm-success-fg, #22c55e) 60%, transparent);
+    background: #3f8d5c;
+    border-color: #35744d;
 }
 
 .pm-switch[aria-checked="true"] .pm-switch-thumb {
@@ -516,11 +680,11 @@
     stroke-width: 1.75;
 }
 
-/* When a card is color-tagged, the hero tile adopts the group color. */
+/* When a card is color-tagged, the hero tile adopts the group color (restrained). */
 .pm-card[data-colored] .pm-card-iconrow {
-    background: color-mix(in srgb, var(--pm-card-accent) 16%, var(--pm-bg-hover));
-    border-color: color-mix(in srgb, var(--pm-card-accent) 40%, var(--pm-border-default));
-    color: var(--pm-card-accent);
+    background: color-mix(in srgb, var(--pm-card-accent) 8%, var(--pm-bg-hover));
+    border-color: color-mix(in srgb, var(--pm-card-accent) 20%, var(--pm-border-default));
+    color: color-mix(in srgb, var(--pm-card-accent) 65%, var(--pm-text-color));
 }
 
 /* Meta row under the title: version # github/local. */
@@ -558,24 +722,34 @@
     color: var(--pm-text-muted);
 }
 
-/* Per-card color tag: full-perimeter border + subtle background wash. */
+/* Per-card color tag: full-perimeter border + subtle background wash (kept restrained). */
 .pm-card[data-colored] {
-    border-color: var(--pm-card-accent);
-    background: color-mix(in srgb, var(--pm-card-accent) 10%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-card-accent) 50%, var(--pm-border-default));
+    background: color-mix(in srgb, var(--pm-card-accent) 5%, var(--pm-bg-default));
 }
 
+/* Untagged state is a muted colour wheel, so the control is actually visible on a dark
+   card and reads unmistakably as "pick a colour". A tagged card fills it with its colour. */
 .pm-color-btn {
     margin-left: auto;
     flex: 0 0 auto;
     align-self: center;
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border-radius: 50%;
-    border: 1px solid var(--pm-border-default);
-    background: var(--pm-bg-subtle);
+    border: 1px solid var(--pm-text-muted);
+    background: conic-gradient(from 180deg,
+            #ef4444, #f97316, #f59e0b, #22c55e, #14b8a6,
+            #06b6d4, #3b82f6, #6366f1, #8b5cf6, #ec4899, #ef4444);
+    opacity: 0.38;
     cursor: pointer;
-    transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+    transition: border-color 0.12s ease, opacity 0.12s ease, box-shadow 0.12s ease;
+}
+
+.pm-color-btn:hover {
+    opacity: 0.8;
+    border-color: var(--pm-text-color);
 }
 
 .pm-color-btn:hover {
@@ -589,7 +763,9 @@
 
 .pm-color-btn[data-has-color] {
     background: var(--pm-card-accent);
-    border-color: color-mix(in srgb, var(--pm-card-accent) 60%, transparent);
+    background-image: none;
+    border-color: color-mix(in srgb, #ffffff 35%, var(--pm-card-accent));
+    opacity: 1;
 }
 
 .pm-color-popover {
@@ -597,6 +773,8 @@
     z-index: 10001;
     display: grid;
     grid-template-columns: repeat(6, 1fr);
+    /* Hug the swatch grid — never stretch to the width of an ancestor/viewport. */
+    width: max-content;
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--pm-border-default);
@@ -642,6 +820,166 @@
     display: flex;
     align-items: center;
     gap: 12px;
+}
+
+/*
+ * Confirmation popover — appears right where the user clicked (on the card/button), rather
+ * than a centred modal. The scrim is transparent: it only exists to catch outside clicks.
+ */
+.pm-confirm-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 10500;
+    background: transparent;
+}
+
+.pm-confirm-pop {
+    position: fixed;
+    width: 320px;
+    max-width: calc(100vw - 24px);
+    padding: 14px 14px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, #ffffff 7%, var(--pm-modal-bg));
+    border: 1px solid color-mix(in srgb, #ffffff 16%, var(--pm-border-default));
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.3);
+    animation: pm-confirm-in 110ms ease-out;
+}
+
+@keyframes pm-confirm-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+    to   { opacity: 1; transform: none; }
+}
+
+.pm-confirm-pop h3 {
+    margin: 0 0 8px;
+    font-size: 14px;
+}
+
+.pm-confirm-body {
+    margin-bottom: 14px;
+}
+
+.pm-confirm-line {
+    margin: 0 0 6px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--pm-text-muted);
+}
+
+.pm-confirm-line:first-child {
+    color: var(--pm-text-color);
+}
+
+.pm-confirm-line:last-child {
+    margin-bottom: 0;
+}
+
+.pm-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+/* Installed entries on Discover uninstall instead (red tint). */
+.pm-btn.pm-btn-uninstall {
+    background: color-mix(in srgb, var(--pm-danger) 12%, var(--pm-bg-default));
+    color: var(--pm-danger-fg);
+    border-color: color-mix(in srgb, var(--pm-danger) 40%, var(--pm-border-default));
+}
+
+.pm-btn.pm-btn-uninstall:hover {
+    background: color-mix(in srgb, var(--pm-danger) 22%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-danger) 60%, var(--pm-border-default));
+}
+
+/* Install button: left→right progress fill while working, snapping to 100% on success. */
+.pm-btn.pm-installing {
+    position: relative;
+    overflow: hidden;
+    cursor: progress;
+}
+
+.pm-btn.pm-installing::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: scaleX(0);
+    transform-origin: left center;
+    background: color-mix(in srgb, var(--pm-accent) 32%, transparent);
+    animation: pm-install-fill 1.2s ease-out forwards;
+    pointer-events: none;
+}
+
+.pm-btn.pm-install-done::before {
+    animation: none;
+    transform: scaleX(1);
+    transition: transform 170ms ease-out;
+    background: color-mix(in srgb, var(--pm-success) 38%, transparent);
+}
+
+@keyframes pm-install-fill {
+    from { transform: scaleX(0); }
+    to   { transform: scaleX(0.9); }
+}
+
+/* Confetti pop (dependency-free; particles are animated in JS). */
+.pm-confetti-layer {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 11000;
+}
+
+.pm-confetti {
+    position: fixed;
+    width: 7px;
+    height: 10px;
+    border-radius: 1px;
+    will-change: transform, opacity;
+}
+
+/* Bulk on/off actions: subtle semantic tints so they read at a glance. */
+.pm-btn.pm-btn-allon {
+    background: color-mix(in srgb, var(--pm-success) 12%, var(--pm-bg-default));
+    color: var(--pm-success-fg);
+    border-color: color-mix(in srgb, var(--pm-success) 40%, var(--pm-border-default));
+}
+
+.pm-btn.pm-btn-allon:hover {
+    background: color-mix(in srgb, var(--pm-success) 22%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-success) 60%, var(--pm-border-default));
+}
+
+.pm-btn.pm-btn-alloff {
+    background: color-mix(in srgb, var(--pm-danger) 12%, var(--pm-bg-default));
+    color: var(--pm-danger-fg);
+    border-color: color-mix(in srgb, var(--pm-danger) 40%, var(--pm-border-default));
+}
+
+.pm-btn.pm-btn-alloff:hover {
+    background: color-mix(in srgb, var(--pm-danger) 22%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-danger) 60%, var(--pm-border-default));
+}
+
+/* Refresh / check-for-updates (↻): larger glyph, warm yellow tint. */
+.pm-btn.pm-btn-update .pm-btn-icon,
+.pm-btn.pm-btn-refresh .pm-btn-icon {
+    font-size: 18px;
+}
+
+#pm-check-updates-global-btn,
+#pm-check-updates-col-btn,
+.pm-btn.pm-btn-refresh {
+    color: var(--pm-warning-fg);
+    background: color-mix(in srgb, var(--pm-warning) 10%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-warning) 35%, var(--pm-border-default));
+}
+
+#pm-check-updates-global-btn:hover,
+#pm-check-updates-col-btn:hover,
+.pm-btn.pm-btn-refresh:hover {
+    background: color-mix(in srgb, var(--pm-warning) 20%, var(--pm-bg-default));
+    border-color: color-mix(in srgb, var(--pm-warning) 55%, var(--pm-border-default));
 }
 
 .pm-safe-mode {
@@ -756,6 +1094,87 @@
     z-index: 10;
 }
 
+/*
+ * Type corner ribbon (Plugin / Collection / Theme) — same diagonal idea as the UPDATE
+ * ribbon, but deliberately quiet: muted text, low-mix tint, no shadow.
+ */
+.pm-card[data-ribbon] {
+    position: relative;
+    overflow: hidden;
+}
+
+/*
+ * Category is a light icon in the card's top-right corner (the hero icon is reserved for the
+ * plugin's OWN icon, fetched from its repo). Same glyphs as the Discover filter chips, so the
+ * mapping is learnable at a glance.
+ */
+.pm-card[data-ctype] {
+    position: relative;
+}
+
+.pm-card-typemark {
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'tabler-icons', inherit;
+    font-size: 20px;
+    line-height: 1;
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.pm-card-typemark svg {
+    width: 20px;
+    height: 20px;
+}
+
+.pm-card[data-ctype="app"] .pm-card-typemark {
+    color: #60a5fa;
+}
+
+.pm-card[data-ctype="collection"] .pm-card-typemark {
+    color: #4ade80;
+}
+
+.pm-card[data-ctype="theme"] .pm-card-typemark {
+    color: #a78bfa;
+}
+
+/* Matching glyphs on the Discover filter chips. */
+.pm-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.pm-chip-icon {
+    display: inline-flex;
+    font-family: 'tabler-icons', inherit;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.pm-chip-icon svg {
+    width: 14px;
+    height: 14px;
+}
+
+.pm-filter-chip[data-filter="app"] .pm-chip-icon {
+    color: #60a5fa;
+}
+
+.pm-filter-chip[data-filter="collection"] .pm-chip-icon {
+    color: #4ade80;
+}
+
+.pm-filter-chip[data-filter="theme"] .pm-chip-icon {
+    color: #a78bfa;
+}
+
 .pm-badge-plugin {
     background: color-mix(in srgb, var(--pm-accent) 14%, transparent);
     color: var(--pm-accent);
@@ -786,7 +1205,10 @@
     flex-wrap: wrap;
 }
 
-.pm-filter-chip {
+/* .pm-chip is the list-controls variant. It deliberately does NOT reuse .pm-filter-chip,
+   whose click handler is wired container-wide for the Discover tab. */
+.pm-filter-chip,
+.pm-chip {
     padding: 4px 12px;
     border-radius: 20px;
     border: 1px solid var(--pm-border-default);
@@ -798,15 +1220,129 @@
     transition: all 0.15s ease;
 }
 
-.pm-filter-chip:hover {
+.pm-filter-chip:hover,
+.pm-chip:hover {
     background: var(--pm-bg-hover);
     color: var(--pm-text-color);
 }
 
-.pm-filter-chip.active {
+.pm-filter-chip.active,
+.pm-chip.active {
     background: color-mix(in srgb, var(--pm-accent) 14%, var(--pm-bg-default));
     color: var(--pm-text-color);
     border-color: color-mix(in srgb, var(--pm-accent) 35%, var(--pm-border-default));
+}
+
+/* List controls row: search + sort + status chips + color filter. */
+.pm-list-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 15px;
+}
+
+.pm-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.pm-color-filter {
+    display: flex;
+    align-items: center;
+}
+
+/* Color filter: one button that opens the swatch popover (no swatch row in the toolbar). */
+.pm-colorfilter-btn {
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+}
+
+.pm-colorfilter-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--pm-text-muted) 60%, transparent);
+}
+
+/* "Any color" state: a muted wheel so the control still reads as a colour picker. */
+.pm-colorfilter-dot[data-any] {
+    background: conic-gradient(from 180deg,
+            #ef4444, #f97316, #f59e0b, #22c55e, #14b8a6,
+            #06b6d4, #3b82f6, #6366f1, #8b5cf6, #ec4899, #ef4444);
+    opacity: 0.45;
+}
+
+/* Segmented view toggle (Grid | List) — two joined icon buttons. */
+.pm-seg-group {
+    display: inline-flex;
+    flex: 0 0 auto;
+    border: 1px solid var(--pm-border-default);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.pm-seg {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 30px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--pm-text-muted);
+    cursor: pointer;
+    font-family: 'tabler-icons', inherit;
+    font-size: 16px;
+    line-height: 1;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.pm-seg + .pm-seg {
+    border-left: 1px solid var(--pm-border-default);
+}
+
+.pm-seg svg {
+    width: 16px;
+    height: 16px;
+}
+
+.pm-seg:hover {
+    background: var(--pm-bg-hover);
+    color: var(--pm-text-color);
+}
+
+.pm-seg.active {
+    background: color-mix(in srgb, var(--pm-accent) 16%, var(--pm-bg-default));
+    color: var(--pm-text-color);
+}
+
+.pm-seg:focus {
+    outline: none;
+}
+
+.pm-seg:focus-visible {
+    outline: 2px solid var(--pm-focus-ring);
+    outline-offset: -2px;
+}
+
+/* Sort dropdown — themed like .pm-input, with a custom caret (no native arrow). */
+.pm-select {
+    width: auto;
+    min-width: 150px;
+    padding-right: 28px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: calc(100% - 15px) calc(50% + 1px), calc(100% - 10px) calc(50% + 1px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
 }
 
 .pm-empty-state {
@@ -823,6 +1359,8 @@
     width: 100%;
     height: 100%;
     background: var(--pm-overlay-bg);
+    -webkit-backdrop-filter: blur(3px);
+    backdrop-filter: blur(3px);
     z-index: 1000;
     display: flex;
     align-items: center;
@@ -830,14 +1368,16 @@
     color: inherit;
 }
 
+/* Lift the modal off the page: a slightly lighter surface than the panel behind it, a
+   brighter border and a deeper shadow, so it reads clearly as a floating dialog. */
 .pm-modal-content {
-    background: var(--pm-modal-bg);
+    background: color-mix(in srgb, #ffffff 7%, var(--pm-modal-bg));
     padding: 20px;
-    border-radius: 8px;
+    border-radius: 10px;
     width: 500px;
     max-width: 90%;
-    border: 1px solid var(--pm-border-default);
-    box-shadow: var(--pm-shadow-modal);
+    border: 1px solid color-mix(in srgb, #ffffff 16%, var(--pm-border-default));
+    box-shadow: 0 20px 55px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .pm-export-content {
