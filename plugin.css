@@ -479,6 +479,18 @@
     margin-top: 18px;
 }
 
+/*
+ * Pin the on/off switch to the far right of the row, always, with clear space between it and
+ * the action icons — it's a state control, not another action, so it shouldn't sit flush
+ * against them. The auto-margin has to be on the switch itself: .pm-card-actions-wrapper is
+ * shrink-to-fit, so an auto-margin on a button inside it has no free space to absorb and does
+ * nothing.
+ */
+.pm-card-actions > .pm-switch {
+    margin-left: auto;
+    padding-left: 0;
+}
+
 .pm-btn {
     padding: 6px 12px;
     border-radius: 4px;
@@ -543,27 +555,38 @@
     color: var(--pm-danger-fg);
 }
 
+/*
+ * Card action buttons: quiet at rest, colour REVEALED on hover.
+ *
+ * The per-action hues (purple = update, green = reinstall, accent = link) are intentional, but
+ * at ~12% mix they were so faint on a dark card the intent never came across. Rather than make
+ * them loud all the time, they now follow the pattern Delete already used — a restrained tint at
+ * rest that resolves into its full colour on hover. That keeps a row of four buttons calm while
+ * still telling you what each one means the moment you reach for it.
+ */
 .pm-btn.pm-btn-update {
-    background: color-mix(in srgb, var(--pm-update) 12%, var(--pm-bg-default));
-    color: var(--pm-text-color);
-    border-color: color-mix(in srgb, var(--pm-update) 35%, var(--pm-border-default));
+    background: color-mix(in srgb, var(--pm-update) 17%, var(--pm-bg-default));
+    color: var(--pm-text-muted);
+    border-color: color-mix(in srgb, var(--pm-update) 38%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-update:hover {
-    background: color-mix(in srgb, var(--pm-update) 22%, var(--pm-bg-hover));
-    border-color: color-mix(in srgb, var(--pm-update) 50%, var(--pm-border-default));
+    background: color-mix(in srgb, var(--pm-update) 36%, var(--pm-bg-hover));
+    color: var(--pm-update-fg);
+    border-color: color-mix(in srgb, var(--pm-update) 75%, var(--pm-border-default));
 }
 
-/* Reinstall: subtle success-tinted action, not a saturated fill. */
+/* Reinstall: success-tinted action, not a saturated fill. */
 .pm-btn.pm-btn-reinstall {
-    background: color-mix(in srgb, var(--pm-success) 14%, var(--pm-bg-default));
-    color: var(--pm-text-color);
-    border-color: color-mix(in srgb, var(--pm-success) 40%, var(--pm-border-default));
+    background: color-mix(in srgb, var(--pm-success) 17%, var(--pm-bg-default));
+    color: var(--pm-text-muted);
+    border-color: color-mix(in srgb, var(--pm-success) 38%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-reinstall:hover {
-    background: color-mix(in srgb, var(--pm-success) 26%, var(--pm-bg-hover));
-    border-color: color-mix(in srgb, var(--pm-success) 55%, var(--pm-border-default));
+    background: color-mix(in srgb, var(--pm-success) 36%, var(--pm-bg-hover));
+    color: var(--pm-success-fg);
+    border-color: color-mix(in srgb, var(--pm-success) 75%, var(--pm-border-default));
 }
 
 .pm-btn.pm-btn-delete {
@@ -576,6 +599,41 @@
     background: color-mix(in srgb, var(--pm-danger) 16%, var(--pm-bg-default));
     color: var(--pm-danger-fg);
     border-color: color-mix(in srgb, var(--pm-danger) 50%, var(--pm-border-default));
+}
+
+/*
+ * Link follows the same rest → hover reveal, so the row is one deliberate set rather than two
+ * tinted buttons sitting next to a plain one (which reads as an accident, not a decision).
+ */
+.pm-btn.pm-btn-link {
+    background: color-mix(in srgb, var(--pm-accent) 15%, var(--pm-bg-default));
+    color: var(--pm-text-muted);
+    border-color: color-mix(in srgb, var(--pm-accent) 35%, var(--pm-border-default));
+}
+
+.pm-btn.pm-btn-link:hover {
+    background: color-mix(in srgb, var(--pm-accent) 32%, var(--pm-bg-hover));
+    color: var(--pm-link);
+    border-color: color-mix(in srgb, var(--pm-accent) 70%, var(--pm-border-default));
+}
+
+/*
+ * An update is actually available — the one case where the colour is a call to action, not just
+ * a category, so it gets the strongest treatment. A theme-derived purple wash is the thing that
+ * was invisible in the first place, which is exactly why the UPDATE ribbon on this same card
+ * already uses a fixed deep purple with light text ("legibility on all themes"). Match it, so
+ * the button and the ribbon above it read as one signal.
+ */
+.pm-card-actions-wrapper .pm-btn.pm-btn-update.update-btn {
+    background: #5b21b6;
+    color: #ede9fe;
+    border-color: #7c3aed;
+    font-weight: 600;
+}
+
+.pm-card-actions-wrapper .pm-btn.pm-btn-update.update-btn:hover {
+    background: #6d28d9;
+    border-color: #8b5cf6;
 }
 
 /* On/off toggle switch (replaces the old status-dot buttons). ON = enabled. */
