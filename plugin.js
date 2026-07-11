@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.16.1';
+const PM_VERSION = '1.17.0';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -2424,7 +2424,9 @@ class Plugin extends AppPlugin {
             );
             const btnId = typeFilter === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
             const btn = panelContainer.querySelector(btnId);
-            if (btn) btn.style.display = hasUpdates ? 'inline-block' : 'none';
+            // Toggle the class, not inline display: `.pm-hidden` is `display: none !important`,
+            // which an inline style cannot override (this was the fix in PR #2).
+            if (btn) btn.classList.toggle('pm-hidden', !hasUpdates);
         } catch (e) { }
     }
 
@@ -4071,15 +4073,17 @@ class Plugin extends AppPlugin {
 
         let successCount = 0;
         let failedNames = [];
-        let deletedCount = 0;
+        const total = pluginsToUpdate.length;
 
-        for (const p of pluginsToUpdate) {
+        for (let i = 0; i < pluginsToUpdate.length; i++) {
+            const p = pluginsToUpdate[i];
+            btn.textContent = `Updating… (${i + 1}/${total})`;
             try {
                 const conf = p.getExistingCodeAndConfig().json;
                 const sourceRepo = conf.__source_repo;
                 if (!sourceRepo) continue;
 
-                // Call checkAndUpdatePlugin but bypassing UI prompts and buttons
+                // Fetch + validate remote, mirroring checkAndUpdatePlugin without its UI prompts
                 const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
 
                 this._validatePluginJS(remoteJson.name, remoteJs);
@@ -4095,24 +4099,24 @@ class Plugin extends AppPlugin {
                     await p.saveCSS(sanitizedCSS);
                 }
 
-                // Clear from known updates
-                delete availableUpdates[p.getGuid()];
-                this._writeUpdateCache(availableUpdates);
-                this._updateStatusBarIcon();
-
                 if (isSelfUpdate) {
+                    // Saving self tears down this plugin's context immediately, so record
+                    // success and clear the cache BEFORE the save, then save last.
+                    successCount++;
+                    delete availableUpdates[p.getGuid()];
+                    this._writeUpdateCache(availableUpdates);
+                    this._updateStatusBarIcon();
+                    localStorage.setItem('pm_self_update_pending', 'true');
                     const panel = this.ui.getActivePanel();
                     if (panel) this.ui.closePanel(panel);
-                    localStorage.setItem('pm_self_update_pending', 'true');
+                    await p.savePlugin(sanitizedConf, remoteJs);
                 } else {
-                    this._autoExport(); // fire-and-forget
-                    this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
-                }
-
-                await p.savePlugin(sanitizedConf, remoteJs);
-
-                if (!isSelfUpdate) {
-                    this.loadPlugins(container);
+                    await p.savePlugin(sanitizedConf, remoteJs);
+                    // Only mark as updated once the save has actually succeeded.
+                    successCount++;
+                    delete availableUpdates[p.getGuid()];
+                    this._writeUpdateCache(availableUpdates);
+                    this._updateStatusBarIcon();
                 }
             } catch (e) {
                 console.error(e);
@@ -4130,7 +4134,6 @@ class Plugin extends AppPlugin {
         btn.disabled = false;
 
         const parts = [`Successfully updated: ${successCount}`];
-        if (deletedCount > 0) parts.push(`Deleted: ${deletedCount}`);
         if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
 
         this.ui.addToaster({
