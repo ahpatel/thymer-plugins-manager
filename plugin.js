@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.19.0';
+const PM_VERSION = '1.19.1';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -847,7 +847,7 @@ class Plugin extends AppPlugin {
             if (selfUpdateInfo && selfUpdateInfo.version) {
                 selfUpdateBtn.textContent = `Update Available (v${selfUpdateInfo.version})`;
                 selfUpdateBtn.classList.remove('pm-hidden');
-                
+
                 selfUpdateBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
                     const p = this;
