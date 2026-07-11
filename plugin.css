@@ -193,7 +193,7 @@
     background: var(--pm-bg-default);
     border: 1px solid var(--pm-border-default);
     border-radius: 8px;
-    padding: 15px;
+    padding: 18px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -219,15 +219,42 @@
  * badges to wrap to a new line if the card is too narrow to fit them inline.
  */
 .pm-card-info h3 {
-    margin: 0 0 5px 0;
+    margin: 0 0 6px 0;
     font-size: 16px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
+    min-width: 0;
+}
+
+.pm-card-name {
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
+}
+
+/* Attribution line under the title (author / GitHub owner). */
+.pm-card-attr {
+    font-size: 12px;
+    color: var(--pm-text-muted);
+    margin: 0 0 12px 0;
+}
+
+.pm-card-attr:empty {
+    display: none;
+}
+
+.pm-card-attr-link {
+    color: var(--pm-link);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--pm-link) 50%, transparent);
+    text-underline-offset: 2px;
+}
+
+.pm-card-attr-link:hover {
+    text-decoration-color: var(--pm-link);
 }
 
 .pm-card-info h3 .pm-badge {
@@ -284,11 +311,12 @@
 .pm-card-actions {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
     width: 100%;
     min-width: 0;
     justify-content: flex-start;
-    margin-top: 10px;
+    margin-top: 18px;
 }
 
 .pm-btn {
@@ -388,48 +416,65 @@
     border-color: color-mix(in srgb, var(--pm-danger) 50%, var(--pm-border-default));
 }
 
-.pm-state-icon {
-    font-size: 13px;
-    line-height: 1;
-    font-weight: 700;
+/* On/off toggle switch (replaces the old status-dot buttons). ON = enabled. */
+.pm-switch {
+    --pm-switch-w: 42px;
+    --pm-switch-h: 24px;
+    --pm-switch-pad: 3px;
+    position: relative;
+    flex: 0 0 auto;
+    align-self: center;
+    width: var(--pm-switch-w);
+    height: var(--pm-switch-h);
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--pm-border-default) 80%, transparent);
+    border-radius: 999px;
+    background: var(--pm-bg-subtle);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    -webkit-appearance: none;
+    appearance: none;
 }
 
-/* Disable button (currently enabled): outlined with success-colored dot. */
-.pm-btn.pm-btn-disable {
-    background: var(--pm-bg-default);
-    color: var(--pm-text-color);
-    border-color: color-mix(in srgb, var(--pm-success) 35%, var(--pm-border-default));
+.pm-switch-thumb {
+    position: absolute;
+    top: 50%;
+    left: var(--pm-switch-pad);
+    width: calc(var(--pm-switch-h) - 2 * var(--pm-switch-pad));
+    height: calc(var(--pm-switch-h) - 2 * var(--pm-switch-pad));
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+    transform: translate(0, -50%);
+    transition: transform 0.15s ease;
 }
 
-.pm-btn.pm-btn-disable .pm-state-icon {
-    color: var(--pm-success-fg);
-    text-shadow: 0 0 0 currentColor;
+.pm-switch[aria-checked="true"] {
+    background: var(--pm-success-fg, #22c55e);
+    border-color: color-mix(in srgb, var(--pm-success-fg, #22c55e) 60%, transparent);
 }
 
-.pm-btn.pm-btn-disable:hover {
-    background: color-mix(in srgb, var(--pm-success) 14%, var(--pm-bg-hover));
-    border-color: color-mix(in srgb, var(--pm-success) 50%, var(--pm-border-default));
+.pm-switch[aria-checked="true"] .pm-switch-thumb {
+    transform: translate(calc(var(--pm-switch-w) - var(--pm-switch-h)), -50%);
 }
 
-/* Enable button (currently disabled): muted outlined; warning tint on hover. */
-.pm-btn.pm-btn-enable {
-    color: var(--pm-text-muted);
-    border-color: var(--pm-border-default);
-    background: transparent;
+.pm-switch:not(:disabled):hover {
+    border-color: color-mix(in srgb, var(--pm-accent) 45%, var(--pm-border-default));
 }
 
-.pm-btn.pm-btn-enable .pm-state-icon {
-    color: var(--pm-text-muted);
+.pm-switch:focus-visible {
+    outline: 2px solid var(--pm-focus-ring);
+    outline-offset: 2px;
 }
 
-.pm-btn.pm-btn-enable:hover {
-    background: color-mix(in srgb, var(--pm-warning) 16%, var(--pm-bg-default));
-    color: var(--pm-warning-fg);
-    border-color: color-mix(in srgb, var(--pm-warning) 50%, var(--pm-border-default));
+.pm-switch:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
-.pm-btn.pm-btn-enable:hover .pm-state-icon {
-    color: var(--pm-warning-fg);
+.pm-switch[aria-busy="true"] {
+    cursor: progress;
+    opacity: 0.7;
 }
 
 .pm-card.pm-card-disabled {
@@ -437,8 +482,176 @@
     opacity: 0.9;
 }
 
-.pm-btn:disabled .pm-state-icon {
-    opacity: 0.5;
+/* Hero plugin icon: seated in a rounded tile on its own line above the name. */
+.pm-card-iconrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 60px;
+    height: 60px;
+    border-radius: 15px;
+    background: var(--pm-bg-hover);
+    border: 1px solid var(--pm-border-default);
+    color: var(--pm-text-color);
+    margin-bottom: 16px;
+    line-height: 0;
+}
+
+/* Thymer icons are Tabler WEBFONT glyphs — sized by font-size, not width/height.
+   (An svg rule is kept as a fallback in case a build returns an <svg> instead.) */
+.pm-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    font-family: 'tabler-icons', inherit;
+    font-size: 34px;
+    line-height: 1;
+    color: inherit;
+}
+
+.pm-card-icon svg {
+    width: 34px;
+    height: 34px;
+    stroke-width: 1.75;
+}
+
+/* When a card is color-tagged, the hero tile adopts the group color. */
+.pm-card[data-colored] .pm-card-iconrow {
+    background: color-mix(in srgb, var(--pm-card-accent) 16%, var(--pm-bg-hover));
+    border-color: color-mix(in srgb, var(--pm-card-accent) 40%, var(--pm-border-default));
+    color: var(--pm-card-accent);
+}
+
+/* Meta row under the title: version # github/local. */
+.pm-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 0 0 7px 0;
+}
+
+/* Real GitHub mark (inlined Iconify mask, painted with currentColor). */
+.pm-gh-glyph {
+    --pm-gh-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E");
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-right: 4px;
+    vertical-align: -2px;
+    background-color: currentColor;
+    -webkit-mask-image: var(--pm-gh-mask);
+    mask-image: var(--pm-gh-mask);
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
+}
+
+/* GitHub source mark shown inline after the version (no label; nothing for local). */
+.pm-gh-mark {
+    width: 15px;
+    height: 15px;
+    margin-right: 0;
+    vertical-align: -3px;
+    color: var(--pm-text-muted);
+}
+
+/* Per-card color tag: full-perimeter border + subtle background wash. */
+.pm-card[data-colored] {
+    border-color: var(--pm-card-accent);
+    background: color-mix(in srgb, var(--pm-card-accent) 10%, var(--pm-bg-default));
+}
+
+.pm-color-btn {
+    margin-left: auto;
+    flex: 0 0 auto;
+    align-self: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--pm-border-default);
+    background: var(--pm-bg-subtle);
+    cursor: pointer;
+    transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.pm-color-btn:hover {
+    border-color: color-mix(in srgb, var(--pm-accent) 45%, var(--pm-border-default));
+}
+
+.pm-color-btn:focus-visible {
+    outline: 2px solid var(--pm-focus-ring);
+    outline-offset: 2px;
+}
+
+.pm-color-btn[data-has-color] {
+    background: var(--pm-card-accent);
+    border-color: color-mix(in srgb, var(--pm-card-accent) 60%, transparent);
+}
+
+.pm-color-popover {
+    position: fixed;
+    z-index: 10001;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--pm-border-default);
+    border-radius: 8px;
+    background: var(--pm-modal-bg);
+    box-shadow: var(--pm-shadow-modal);
+}
+
+.pm-color-swatch {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(127, 127, 127, 0.3);
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+
+.pm-color-swatch:hover {
+    transform: scale(1.12);
+}
+
+.pm-color-swatch[data-selected] {
+    box-shadow: 0 0 0 2px var(--pm-modal-bg), 0 0 0 4px var(--pm-accent);
+}
+
+.pm-color-swatch.pm-color-none {
+    position: relative;
+    background: var(--pm-bg-subtle);
+}
+
+/* Diagonal "no color" slash. */
+.pm-color-swatch.pm-color-none::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    background: linear-gradient(to top right, transparent 44%, var(--pm-danger) 44%, var(--pm-danger) 56%, transparent 56%);
+    border-radius: 50%;
+}
+
+/* Header actions cluster + Safe Mode master switch. */
+.pm-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.pm-safe-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--pm-text-muted);
+    white-space: nowrap;
 }
 
 .pm-input-group {

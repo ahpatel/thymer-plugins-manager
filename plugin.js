@@ -1,3 +1,19 @@
+// Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
+// and inlined so this paste-only plugin stays self-contained (no shared-module import).
+const PM_CARD_COLORS = [
+    { name: 'Slate', hex: '#64748b' },
+    { name: 'Red', hex: '#ef4444' },
+    { name: 'Orange', hex: '#f97316' },
+    { name: 'Amber', hex: '#f59e0b' },
+    { name: 'Green', hex: '#22c55e' },
+    { name: 'Teal', hex: '#14b8a6' },
+    { name: 'Cyan', hex: '#06b6d4' },
+    { name: 'Blue', hex: '#3b82f6' },
+    { name: 'Indigo', hex: '#6366f1' },
+    { name: 'Violet', hex: '#8b5cf6' },
+    { name: 'Pink', hex: '#ec4899' }
+];
+
 class Plugin extends AppPlugin {
 
     onLoad() {
@@ -10,6 +26,7 @@ class Plugin extends AppPlugin {
         this._updateIntervalId = null;
         this._activeModals = []; // track all open modals for cleanup on unload
         try { this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}'); } catch (e) { this._disabledPlugins = {}; }
+        try { this._pluginColors = JSON.parse(localStorage.getItem('pm_plugin_colors') || '{}'); } catch (e) { this._pluginColors = {}; }
         try { this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}'); } catch (e) { this._incompatiblePlugins = {}; }
         // Evict stale incompatible entries older than 30 days
         const _cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -115,6 +132,7 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
+        this._closeColorPopover();
         // Remove any dangling modals from the DOM to prevent memory leaks
         for (const modal of (this._activeModals || [])) {
             if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
@@ -267,10 +285,15 @@ class Plugin extends AppPlugin {
             <div class="pm-container">
                 <div class="pm-header">
                     <h1>Plugins Manager</h1>
-                    <button class="pm-btn pm-btn-check-updates" id="pm-check-updates-btn" title="Check All Updates">
-                        <span class="pm-btn-icon" aria-hidden="true">↻</span>
-                        <span class="pm-btn-label">Check All Updates</span>
-                    </button>
+                    <div class="pm-header-actions">
+                        <div class="pm-safe-mode" id="pm-safe-mode-slot" title="Safe Mode: turn every GitHub-linked plugin off at once (settings preserved), then back on">
+                            <span class="pm-safe-mode-label">Safe Mode</span>
+                        </div>
+                        <button class="pm-btn pm-btn-check-updates" id="pm-check-updates-btn" title="Check All Updates">
+                            <span class="pm-btn-icon" aria-hidden="true">↻</span>
+                            <span class="pm-btn-label">Check All Updates</span>
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="pm-tabs">
@@ -291,6 +314,8 @@ class Plugin extends AppPlugin {
                         <div class="pm-tab-actions pm-tab-actions-secondary">
                             <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for plugin updates"><span class="pm-btn-icon" aria-hidden="true">↻</span></button>
                             <button class="pm-btn pm-btn-update update-btn pm-hidden" id="pm-update-all-global-btn">Update All</button>
+                            <button class="pm-btn" id="pm-disable-all-global-btn" title="Turn off all GitHub-linked plugins">All Off</button>
+                            <button class="pm-btn" id="pm-enable-all-global-btn" title="Turn all disabled plugins back on">All On</button>
                         </div>
                     </div>
                     <div id="pm-global-list" class="pm-list-container">Loading...</div>
@@ -306,6 +331,8 @@ class Plugin extends AppPlugin {
                         <div class="pm-tab-actions pm-tab-actions-secondary">
                             <button class="pm-btn pm-btn-update" id="pm-check-updates-col-btn" title="Check for collection updates"><span class="pm-btn-icon" aria-hidden="true">↻</span></button>
                             <button class="pm-btn pm-btn-update update-btn pm-hidden" id="pm-update-all-col-btn">Update All</button>
+                            <button class="pm-btn" id="pm-disable-all-col-btn" title="Turn off all GitHub-linked collection plugins">All Off</button>
+                            <button class="pm-btn" id="pm-enable-all-col-btn" title="Turn all disabled collection plugins back on">All On</button>
                         </div>
                     </div>
                     <div id="pm-collections-list" class="pm-list-container">Loading...</div>
@@ -628,12 +655,17 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-export-global-btn').addEventListener('click', () => this.showExportDialog('app'));
         container.querySelector('#pm-check-updates-global-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'app'));
         container.querySelector('#pm-update-all-global-btn').addEventListener('click', () => this._updateAllAvailable(container, 'app'));
+        container.querySelector('#pm-disable-all-global-btn').addEventListener('click', (e) => this._disableAllPlugins(container, 'app', { el: e.currentTarget, isSwitch: false }));
+        container.querySelector('#pm-enable-all-global-btn').addEventListener('click', (e) => this._enableAllPlugins(container, 'app', { el: e.currentTarget, isSwitch: false }));
 
         container.querySelector('#pm-install-col-btn').addEventListener('click', () => this.showInstallDialog(container, 'collection'));
         container.querySelector('#pm-import-col-btn').addEventListener('click', () => this.showImportDialog(container, 'collection'));
         container.querySelector('#pm-export-col-btn').addEventListener('click', () => this.showExportDialog('collection'));
         container.querySelector('#pm-check-updates-col-btn').addEventListener('click', () => this._manualCheckForUpdates(container, 'collection'));
         container.querySelector('#pm-update-all-col-btn').addEventListener('click', () => this._updateAllAvailable(container, 'collection'));
+        container.querySelector('#pm-disable-all-col-btn').addEventListener('click', (e) => this._disableAllPlugins(container, 'collection', { el: e.currentTarget, isSwitch: false }));
+        container.querySelector('#pm-enable-all-col-btn').addEventListener('click', (e) => this._enableAllPlugins(container, 'collection', { el: e.currentTarget, isSwitch: false }));
+        this._setupSafeModeToggle(container);
         container.querySelector('#pm-export-workspace-btn').addEventListener('click', () => this.showExportDialog('all'));
         container.querySelector('#pm-import-workspace-btn').addEventListener('click', () => this.showImportDialog(container, 'all'));
         container.querySelector('#pm-export-workspace-themes-btn').addEventListener('click', () => this._exportAllThemes());
@@ -1065,73 +1097,391 @@ class Plugin extends AppPlugin {
         localStorage.setItem('pm_disabled_plugins', JSON.stringify(this._disabledPlugins || {}));
     }
 
+    _savePluginColors() {
+        try { localStorage.setItem('pm_plugin_colors', JSON.stringify(this._pluginColors || {})); } catch (e) { }
+    }
+
+    // Stable key for a plugin's color: prefer the GitHub source repo (survives the
+    // disable/enable reinstall that mints a new guid); fall back to the guid.
+    _pluginColorKey(conf, guid) {
+        return (conf && conf.__source_repo) || guid || '';
+    }
+
+    // Attribution for a plugin: an explicit author field if present, else the GitHub
+    // repo owner. Returns { label, url } or null when there's nothing to show.
+    _pluginAttribution(conf) {
+        let author = (conf.author || conf.by || '').toString().trim();
+        let url = '';
+        const m = (conf.__source_repo || '').match(/github\.com\/([^\/]+)/i);
+        if (m) {
+            if (!author) author = m[1];
+            url = 'https://github.com/' + m[1];
+        }
+        if (!author) return null;
+        return { label: author, url };
+    }
+
+    // Apply (or clear) a card's color tint. Full-perimeter border + subtle bg wash (CSS).
+    _applyCardColor(cardEl, hex) {
+        if (!cardEl) return;
+        if (hex) {
+            cardEl.dataset.colored = '';
+            cardEl.style.setProperty('--pm-card-accent', hex);
+        } else {
+            delete cardEl.dataset.colored;
+            cardEl.style.removeProperty('--pm-card-accent');
+        }
+    }
+
+    _updateColorBtn(btnEl, hex) {
+        if (!btnEl) return;
+        if (hex) {
+            btnEl.dataset.hasColor = '';
+            btnEl.style.setProperty('--pm-card-accent', hex);
+            btnEl.title = 'Card color — click to change';
+        } else {
+            delete btnEl.dataset.hasColor;
+            btnEl.style.removeProperty('--pm-card-accent');
+            btnEl.title = 'Set a card color';
+        }
+    }
+
+    _closeColorPopover() {
+        if (this._colorPopover) {
+            document.removeEventListener('mousedown', this._colorPopoverOutside, true);
+            document.removeEventListener('keydown', this._colorPopoverKey, true);
+            this._colorPopover.remove();
+            this._colorPopover = null;
+        }
+    }
+
+    // Small swatch popover anchored to a card's color button. Rendered to <body> (cards
+    // are overflow:hidden); the pm-container class lets the --pm-* tokens resolve there.
+    _openColorPopover(anchorEl, currentHex, onPick) {
+        this._closeColorPopover();
+
+        const pop = document.createElement('div');
+        pop.className = 'pm-container pm-color-popover';
+
+        PM_CARD_COLORS.forEach(c => {
+            const sw = document.createElement('button');
+            sw.type = 'button';
+            sw.className = 'pm-color-swatch';
+            sw.style.background = c.hex;
+            sw.title = c.name;
+            sw.setAttribute('aria-label', c.name);
+            if (currentHex && currentHex.toLowerCase() === c.hex.toLowerCase()) sw.dataset.selected = '';
+            sw.addEventListener('click', () => { this._closeColorPopover(); onPick(c.hex); });
+            pop.appendChild(sw);
+        });
+
+        const none = document.createElement('button');
+        none.type = 'button';
+        none.className = 'pm-color-swatch pm-color-none';
+        none.title = 'No color';
+        none.setAttribute('aria-label', 'No color');
+        if (!currentHex) none.dataset.selected = '';
+        none.addEventListener('click', () => { this._closeColorPopover(); onPick(null); });
+        pop.appendChild(none);
+
+        document.body.appendChild(pop);
+
+        // Position under the button, flipping up / clamping to the viewport.
+        const r = anchorEl.getBoundingClientRect();
+        const pr = pop.getBoundingClientRect();
+        let top = r.bottom + 6;
+        if (top + pr.height > window.innerHeight - 8) top = r.top - pr.height - 6;
+        let left = r.right - pr.width;
+        if (left < 8) left = 8;
+        pop.style.top = `${Math.max(8, top)}px`;
+        pop.style.left = `${left}px`;
+
+        this._colorPopover = pop;
+        this._colorPopoverOutside = (e) => { if (!pop.contains(e.target) && e.target !== anchorEl) this._closeColorPopover(); };
+        this._colorPopoverKey = (e) => { if (e.key === 'Escape') this._closeColorPopover(); };
+        setTimeout(() => {
+            document.addEventListener('mousedown', this._colorPopoverOutside, true);
+            document.addEventListener('keydown', this._colorPopoverKey, true);
+        }, 0);
+    }
+
+    // Build an accessible on/off switch (role="switch"). Returns the <button> element.
+    // onToggle receives the switch element so callers can drive its pending/disabled state.
+    _createToggleSwitch({ on, disabled = false, title = '', ariaLabel = '', onToggle } = {}) {
+        const sw = document.createElement('button');
+        sw.type = 'button';
+        sw.className = 'pm-switch';
+        sw.setAttribute('role', 'switch');
+        sw.setAttribute('aria-checked', on ? 'true' : 'false');
+        if (title) sw.title = title;
+        if (ariaLabel) sw.setAttribute('aria-label', ariaLabel);
+        sw.disabled = !!disabled;
+        const thumb = document.createElement('span');
+        thumb.className = 'pm-switch-thumb';
+        thumb.setAttribute('aria-hidden', 'true');
+        sw.appendChild(thumb);
+        if (onToggle && !disabled) {
+            sw.addEventListener('click', () => {
+                if (sw.disabled) return;
+                onToggle(sw);
+            });
+        }
+        return sw;
+    }
+
     _getDisabledPluginsForType(typeFilter) {
         const allDisabled = Object.values(this._disabledPlugins || {});
         return allDisabled.filter(item => {
-            if (!item || !item.sourceRepo) return false;
+            // Valid if it can be restored: a GitHub source to re-fetch, or stashed local code.
+            if (!item || (!item.sourceRepo && !item.code)) return false;
             const type = (item.type || '').toLowerCase();
             const normalized = (type === 'global' || type === 'app') ? 'app' : (type === 'collection' ? 'collection' : 'app');
             return normalized === typeFilter;
         });
     }
 
-    async _disablePlugin(pluginObj, conf, panelContainer) {
-        const sourceRepo = conf.__source_repo;
-        if (!sourceRepo) {
-            this.ui.addToaster({
-                title: 'Cannot Disable',
-                message: 'Only plugins linked to a GitHub source can be disabled and re-enabled.',
-                autoDestroyTime: 5000,
-                dismissible: true
-            });
-            return;
-        }
-
-        const pluginName = conf.name || 'this plugin';
-        if (!confirm(`Disable ${pluginName}?\n\nThis removes it from the official Plugins panel. You can re-enable it later from Plugins Manager.`)) {
-            return;
-        }
+    // Confirm-free core: stash what's needed to bring the plugin back, then trash it.
+    // GitHub plugins stash a repo pointer (re-fetched on enable); LOCAL plugins have no
+    // repo, so we stash their actual code + CSS + config to reinstall from. Throws on failure.
+    // Shared by the single-card toggle and the bulk "All Off" / Safe Mode paths.
+    async _disablePluginCore(pluginObj, conf) {
+        const guid = pluginObj.getGuid();
+        const sourceRepo = conf.__source_repo || '';
+        // Map key: repo for GitHub plugins (stable across guid churn), else a local guid key.
+        const key = sourceRepo || ('local:' + guid);
 
         const rawType = (conf.type || '').toLowerCase();
         const normalizedType = (rawType === 'collection') ? 'collection' : 'app';
 
-        this._disabledPlugins[sourceRepo] = {
+        const entry = {
+            key,
+            guid,
             name: conf.name || 'Unnamed Plugin',
             type: normalizedType,
-            sourceRepo,
+            sourceRepo: sourceRepo || null,
             sourceFiles: conf.__source_files || null,
             version: conf.version || conf.ver || '',
+            icon: conf.icon || null,
+            custom: conf.custom !== undefined ? this._cloneJsonValue(conf.custom) : undefined,
             dateDisabled: new Date().toISOString()
         };
+
+        // Local plugin: no upstream to reinstall from, so keep the actual code + CSS + config.
+        if (!sourceRepo) {
+            const cc = pluginObj.getExistingCodeAndConfig();
+            entry.code = cc.code || '';
+            entry.css = cc.css || '';
+            entry.json = this._cloneJsonValue(cc.json);
+        }
+
+        this._disabledPlugins[key] = entry;
         this._saveDisabledPlugins();
 
         await pluginObj.trashPlugin();
+    }
+
+    // Confirm-free core: reinstall a disabled plugin. GitHub plugins re-fetch from their repo;
+    // LOCAL plugins reinstall from the stashed code/CSS/config. Restores saved settings either
+    // way so configuration survives the off/on cycle. Throws on failure.
+    async _enableDisabledPluginCore(disabledPlugin) {
+        const key = disabledPlugin.key || disabledPlugin.sourceRepo;
+        let name;
+
+        if (disabledPlugin.sourceRepo) {
+            const { json, js, css } = await this.fetchGithubRepo(disabledPlugin.sourceRepo, { sourceFiles: disabledPlugin.sourceFiles });
+            if (disabledPlugin.custom !== undefined) json.custom = this._cloneJsonValue(disabledPlugin.custom);
+            await this.installPlugin(json, js, { interactive: false, cssCode: css });
+            name = json.name || disabledPlugin.name;
+        } else {
+            // Local plugin: reinstall from the stash (no network).
+            const json = this._cloneJsonValue(disabledPlugin.json) || {};
+            if (disabledPlugin.custom !== undefined) json.custom = this._cloneJsonValue(disabledPlugin.custom);
+            await this.installPlugin(json, disabledPlugin.code || '', { interactive: false, cssCode: disabledPlugin.css || '' });
+            name = (json && json.name) || disabledPlugin.name;
+        }
+
+        delete this._disabledPlugins[key];
+        this._saveDisabledPlugins();
+        return name;
+    }
+
+    async _disablePlugin(pluginObj, conf, panelContainer) {
+        const isLocal = !conf.__source_repo;
+        const pluginName = conf.name || 'this plugin';
+        const note = isLocal
+            ? 'This removes it from the Plugins panel. Its code is saved here so you can re-enable it anytime.'
+            : 'This removes it from the official Plugins panel. You can re-enable it later from Plugins Manager.';
+        if (!confirm(`Disable ${pluginName}?\n\n${note}`)) {
+            return;
+        }
+
+        await this._disablePluginCore(pluginObj, conf);
         this._autoExport();
         this.ui.addToaster({ title: 'Plugin disabled', message: `${pluginName} can be re-enabled anytime.`, dismissible: true, autoDestroyTime: 3500 });
         this.loadPlugins(panelContainer);
     }
 
-    async _enableDisabledPlugin(disabledPlugin, panelContainer, enableBtn) {
-        const sourceRepo = disabledPlugin.sourceRepo;
+    async _enableDisabledPlugin(disabledPlugin, panelContainer, toggleEl) {
         try {
-            enableBtn.innerHTML = '';
-            enableBtn.appendChild(this.ui.createIcon('loader'));
-            enableBtn.disabled = true;
+            if (toggleEl) {
+                toggleEl.disabled = true;
+                toggleEl.setAttribute('aria-busy', 'true');
+            }
 
-            const { json, js, css } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: disabledPlugin.sourceFiles });
-            await this.installPlugin(json, js, { interactive: false, cssCode: css });
+            const name = await this._enableDisabledPluginCore(disabledPlugin);
 
-            delete this._disabledPlugins[sourceRepo];
-            this._saveDisabledPlugins();
-
-            this.ui.addToaster({ title: 'Plugin enabled', message: `${json.name || disabledPlugin.name} reinstalled.`, dismissible: true, autoDestroyTime: 3500 });
+            this.ui.addToaster({ title: 'Plugin enabled', message: `${name} reinstalled.`, dismissible: true, autoDestroyTime: 3500 });
             this.loadPlugins(panelContainer);
         } catch (e) {
-            enableBtn.innerHTML = '';
-            enableBtn.innerHTML = '<span class="pm-state-icon" aria-hidden="true">●</span>';
-            enableBtn.disabled = false;
+            if (toggleEl) {
+                toggleEl.disabled = false;
+                toggleEl.removeAttribute('aria-busy');
+            }
             this.ui.addToaster({ title: 'Enable Failed', message: e.message, dismissible: true, autoDestroyTime: 5000 });
         }
+    }
+
+    // Put a bulk-action control into a loading state and return { progress, end }.
+    // Text buttons show a spinner + "(i/total)" progress; switches just go aria-busy.
+    _bulkBusyStart(el, isSwitch) {
+        if (!el) return { progress() { }, end() { } };
+        if (isSwitch) {
+            el.disabled = true;
+            el.setAttribute('aria-busy', 'true');
+            return { progress() { }, end() { el.disabled = false; el.removeAttribute('aria-busy'); } };
+        }
+        const original = el.textContent;
+        el.disabled = true;
+        el.textContent = '';
+        try { el.appendChild(this.ui.createIcon('loader')); } catch (e) { }
+        return {
+            progress: (txt) => { el.textContent = txt; },
+            end: () => { el.textContent = original; el.disabled = false; }
+        };
+    }
+
+    _bulkSummaryToaster(verb, successCount, failedNames) {
+        const parts = [`${verb}: ${successCount}`];
+        if (failedNames.length) parts.push(`Failed: ${failedNames.join(', ')}`);
+        this.ui.addToaster({
+            title: failedNames.length ? `${verb} (with errors)` : `${verb} complete`,
+            message: parts.join('. '),
+            dismissible: true,
+            autoDestroyTime: failedNames.length ? 8000 : 5000
+        });
+    }
+
+    // Bulk "All Off". scope: 'app' | 'collection' | 'all'. Never disables the Plugins
+    // Manager itself (that would close this panel). Returns { count, cancelled }.
+    async _disableAllPlugins(container, scope, control) {
+        let plugins = [];
+        try {
+            if (scope === 'app' || scope === 'all') plugins = plugins.concat(await this.data.getAllGlobalPlugins());
+            if (scope === 'collection' || scope === 'all') plugins = plugins.concat(await this.data.getAllCollections());
+        } catch (e) { }
+
+        // Everything except the Plugins Manager itself (disabling self would close the panel).
+        const targets = plugins.filter(p => {
+            try {
+                return p.getGuid() !== this.getGuid();
+            } catch (e) { return false; }
+        });
+
+        if (targets.length === 0) {
+            this.ui.addToaster({ title: 'Nothing to turn off', message: 'No other plugins are currently enabled.', dismissible: true, autoDestroyTime: 4000 });
+            return { count: 0 };
+        }
+
+        if (!confirm(`Turn OFF ${targets.length} plugin${targets.length === 1 ? '' : 's'}?\n\nEach is removed from the Plugins panel (its settings are preserved) and can be turned back on anytime.`)) {
+            return { cancelled: true };
+        }
+
+        const busy = this._bulkBusyStart(control && control.el, control && control.isSwitch);
+        let successCount = 0;
+        const failedNames = [];
+        const total = targets.length;
+        for (let i = 0; i < targets.length; i++) {
+            const p = targets[i];
+            busy.progress(`Turning off… (${i + 1}/${total})`);
+            try {
+                const conf = p.getExistingCodeAndConfig().json;
+                await this._disablePluginCore(p, conf);
+                successCount++;
+            } catch (e) {
+                console.error(e);
+                try { failedNames.push(p.getExistingCodeAndConfig().json.name || 'Unknown'); }
+                catch (e2) { failedNames.push(p.getGuid()); }
+            }
+        }
+
+        this._autoExport();
+        busy.end();
+        this.loadPlugins(container);
+        this._bulkSummaryToaster('Turned off', successCount, failedNames);
+        return { count: successCount };
+    }
+
+    // Bulk "All On": re-enable every plugin currently disabled within scope.
+    async _enableAllPlugins(container, scope, control) {
+        const disabled = (scope === 'all')
+            ? Object.values(this._disabledPlugins || {}).filter(d => d && (d.sourceRepo || d.code))
+            : this._getDisabledPluginsForType(scope);
+
+        if (disabled.length === 0) {
+            this.ui.addToaster({ title: 'Nothing to turn on', message: 'No disabled plugins to re-enable.', dismissible: true, autoDestroyTime: 4000 });
+            return { count: 0 };
+        }
+
+        if (!confirm(`Turn ON ${disabled.length} plugin${disabled.length === 1 ? '' : 's'}?\n\nEach is reinstalled from its GitHub source (network required).`)) {
+            return { cancelled: true };
+        }
+
+        const busy = this._bulkBusyStart(control && control.el, control && control.isSwitch);
+        let successCount = 0;
+        const failedNames = [];
+        const total = disabled.length;
+        for (let i = 0; i < disabled.length; i++) {
+            const d = disabled[i];
+            busy.progress(`Turning on… (${i + 1}/${total})`);
+            try {
+                await this._enableDisabledPluginCore(d);
+                successCount++;
+            } catch (e) {
+                console.error(e);
+                failedNames.push(d.name || d.sourceRepo || 'Unknown');
+            }
+        }
+
+        this._autoExport();
+        busy.end();
+        this.loadPlugins(container);
+        this._bulkSummaryToaster('Turned on', successCount, failedNames);
+        return { count: successCount };
+    }
+
+    // Header "Safe Mode" master switch: ON turns everything off, OFF turns everything on.
+    // Reflects state on open ("any plugins currently disabled" => Safe Mode is on).
+    _setupSafeModeToggle(container) {
+        const slot = container.querySelector('#pm-safe-mode-slot');
+        if (!slot) return;
+        const existing = slot.querySelector('.pm-switch');
+        if (existing) existing.remove();
+
+        const anyDisabled = Object.keys(this._disabledPlugins || {}).length > 0;
+        const sw = this._createToggleSwitch({
+            on: anyDisabled,
+            ariaLabel: 'Safe Mode. Turn on to disable all plugins; turn off to re-enable them.',
+            onToggle: async (el) => {
+                const turningOn = el.getAttribute('aria-checked') !== 'true'; // intent = opposite of current
+                const result = turningOn
+                    ? await this._disableAllPlugins(container, 'all', { el, isSwitch: true })
+                    : await this._enableAllPlugins(container, 'all', { el, isSwitch: true });
+                if (result && result.cancelled) return; // leave switch as-is on cancel
+                // loadPlugins re-renders lists but not the header; refresh the switch to the real state.
+                this._setupSafeModeToggle(container);
+            }
+        });
+        slot.appendChild(sw);
     }
 
     _renderDisabledPluginCards(panelContainer, container, typeFilter) {
@@ -1143,9 +1493,11 @@ class Plugin extends AppPlugin {
             const card = document.createElement('div');
             card.className = 'pm-card pm-card-disabled';
             card.innerHTML = `
+                <div class="pm-card-iconrow"><span class="pm-card-icon" data-disabled-icon aria-hidden="true"></span></div>
                 <div class="pm-card-info">
-                    <h3>
-                        ${this._escHtml(disabled.name || 'Unnamed Plugin')} 
+                    <h3 class="pm-card-title">
+                        <span class="pm-card-name">${this._escHtml(disabled.name || 'Unnamed Plugin')}</span>
+                        ${disabled.version ? `<span class="pm-badge pm-version-badge">v${this._escHtml(disabled.version)}</span>` : ''}
                         <span class="pm-badge">Disabled</span>
                     </h3>
                     <p>Disabled on ${this._escHtml(disabledDate)}. Re-enable to reinstall in the official Plugins panel.</p>
@@ -1154,15 +1506,27 @@ class Plugin extends AppPlugin {
                 <div class="pm-card-actions"></div>
             `;
 
-            const actionsContainer = card.querySelector('.pm-card-actions');
-            const enableBtn = document.createElement('button');
-            enableBtn.className = 'pm-btn pm-btn-enable';
-            enableBtn.title = 'Disabled plugin — click to enable (reinstall)';
-            enableBtn.setAttribute('aria-label', 'Disabled plugin. Click to enable and reinstall');
-            enableBtn.innerHTML = '<span class="pm-state-icon" aria-hidden="true">●</span>';
-            actionsContainer.appendChild(enableBtn);
+            const disabledIconSlot = card.querySelector('[data-disabled-icon]');
+            if (disabledIconSlot) {
+                try {
+                    disabledIconSlot.appendChild(this.ui.createIcon(disabled.icon || 'box'));
+                } catch (e) {
+                    try { disabledIconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
+                }
+            }
 
-            enableBtn.addEventListener('click', () => this._enableDisabledPlugin(disabled, panelContainer, enableBtn));
+            const actionsContainer = card.querySelector('.pm-card-actions');
+            // Disabled toggle. OFF = disabled; turning ON reinstalls from GitHub.
+            const disabledSwitch = this._createToggleSwitch({
+                on: false,
+                title: 'Disabled — turn on to enable (reinstall from GitHub)',
+                ariaLabel: `${disabled.name || 'Plugin'} disabled. Turn on to enable.`,
+                onToggle: (sw) => this._enableDisabledPlugin(disabled, panelContainer, sw)
+            });
+            actionsContainer.appendChild(disabledSwitch);
+
+            // Carry over any stored color tint (keyed by source repo) for visual continuity.
+            this._applyCardColor(card, this._pluginColors[disabled.sourceRepo || disabled.guid || ''] || null);
             container.appendChild(card);
         });
     }
@@ -1214,26 +1578,46 @@ class Plugin extends AppPlugin {
             const card = document.createElement('div');
             card.className = 'pm-card';
             card.innerHTML = `
+                <div class="pm-card-iconrow"><span class="pm-card-icon" id="pm-icon-${p.getGuid()}" aria-hidden="true"></span></div>
                 <div class="pm-card-info">
-                    <h3 id="pm-title-${p.getGuid()}">
-                        ${this._escHtml(conf.name || 'Unnamed Plugin')} 
-                        <span class="pm-badge" id="pm-badge-type-${p.getGuid()}"></span>
+                    <h3 id="pm-title-${p.getGuid()}" class="pm-card-title">
+                        <span class="pm-card-name">${this._escHtml(conf.name || 'Unnamed Plugin')}</span>
                         <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
+                        ${sourceRepo ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source"></span>` : ''}
                     </h3>
+                    <div class="pm-card-attr" id="pm-attr-${p.getGuid()}"></div>
                     <p>${this._escHtml(conf.description || 'No description')}</p>
                     ${sourceRepo ? `<p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(sourceRepo)}">${this._escHtml(sourceRepo)}</span></p>` : ''}
                 </div>
                 <div class="pm-card-actions"></div>
             `;
 
-            // Add native Type Badges
-            const typeBadge = card.querySelector(`#pm-badge-type-${p.getGuid()}`);
-            if (isLocal) {
-                typeBadge.appendChild(this.ui.createIcon('box'));
-                typeBadge.appendChild(document.createTextNode(' Local'));
-            } else {
-                typeBadge.appendChild(this.ui.createIcon('cloud'));
-                typeBadge.appendChild(document.createTextNode(' GitHub'));
+            // Add the plugin's own icon (Tabler name from its manifest; falls back to 'box')
+            const iconSlot = card.querySelector(`#pm-icon-${p.getGuid()}`);
+            if (iconSlot) {
+                try {
+                    iconSlot.appendChild(this.ui.createIcon(conf.icon || 'box'));
+                } catch (e) {
+                    try { iconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
+                }
+            }
+
+            // Attribution line under the title (author, or GitHub repo owner).
+            const attrSlot = card.querySelector(`#pm-attr-${p.getGuid()}`);
+            const attr = this._pluginAttribution(conf);
+            if (attrSlot && attr) {
+                attrSlot.appendChild(document.createTextNode('by '));
+                if (attr.url) {
+                    const link = document.createElement('span');
+                    link.className = 'pm-card-attr-link';
+                    link.textContent = attr.label;
+                    link.setAttribute('data-external-url', attr.url);
+                    attrSlot.appendChild(link);
+                } else {
+                    attrSlot.appendChild(document.createTextNode(attr.label));
+                }
+            } else if (attrSlot) {
+                attrSlot.remove();
             }
 
             const actionsContainer = card.querySelector('.pm-card-actions');
@@ -1371,20 +1755,36 @@ class Plugin extends AppPlugin {
                 }
             });
 
-            // Add Disable button (GitHub-linked plugins only)
-            const disableBtn = document.createElement('button');
-            disableBtn.className = 'pm-btn pm-btn-disable';
-            disableBtn.title = sourceRepo ? 'Enabled plugin — click to disable (remove from Plugins panel)' : 'Link this plugin to GitHub first to enable disable/re-enable';
-            disableBtn.setAttribute('aria-label', sourceRepo ? 'Enabled plugin. Click to disable and remove from Plugins panel' : 'Disable unavailable until this plugin is linked to GitHub');
-            disableBtn.innerHTML = '<span class="pm-state-icon" aria-hidden="true">●</span>';
-            disableBtn.disabled = !sourceRepo;
-            actionsContainer.appendChild(disableBtn);
+            // Enabled/disabled toggle. ON = enabled. Works for GitHub and local plugins
+            // (local code is stashed on disable so it can be restored on enable).
+            const enabledSwitch = this._createToggleSwitch({
+                on: true,
+                title: 'Enabled — turn off to disable (remove from Plugins panel)',
+                ariaLabel: `${conf.name || 'Plugin'} enabled. Turn off to disable.`,
+                onToggle: () => this._disablePlugin(p, conf, panelContainer)
+            });
+            actionsContainer.appendChild(enabledSwitch);
 
-            disableBtn.addEventListener('click', async () => {
-                if (!sourceRepo) return;
-                await this._disablePlugin(p, conf, panelContainer);
+            // Per-card color tag (pinned to the far bottom-right of the action row).
+            const colorKey = this._pluginColorKey(conf, p.getGuid());
+            const storedHex = this._pluginColors[colorKey] || null;
+            const colorBtn = document.createElement('button');
+            colorBtn.type = 'button';
+            colorBtn.className = 'pm-color-btn';
+            this._updateColorBtn(colorBtn, storedHex);
+            actionsContainer.appendChild(colorBtn);
+            colorBtn.addEventListener('click', () => {
+                if (this._colorPopover) { this._closeColorPopover(); return; }
+                this._openColorPopover(colorBtn, this._pluginColors[colorKey] || null, (hex) => {
+                    if (hex) this._pluginColors[colorKey] = hex;
+                    else delete this._pluginColors[colorKey];
+                    this._savePluginColors();
+                    this._applyCardColor(card, hex);
+                    this._updateColorBtn(colorBtn, hex);
+                });
             });
 
+            this._applyCardColor(card, storedHex);
             container.appendChild(card);
         });
 
