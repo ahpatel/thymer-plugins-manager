@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.17.0';
+const PM_VERSION = '1.17.1';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -1560,12 +1560,14 @@ class Plugin extends AppPlugin {
     }
 
     // Small swatch popover anchored to a card's color button. Rendered to <body> (cards
-    // are overflow:hidden); the pm-container class lets the --pm-* tokens resolve there.
+    // are overflow:hidden). Use pm-tokens, NOT pm-container: the latter also carries the
+    // panel's layout (width: 100%), which this position:fixed popover would inherit as 100%
+    // of the viewport and stretch into a full-width bar.
     _openColorPopover(anchorEl, currentHex, onPick, colors) {
         this._closeColorPopover();
 
         const pop = document.createElement('div');
-        pop.className = 'pm-container pm-color-popover';
+        pop.className = 'pm-tokens pm-color-popover';
 
         (colors || PM_CARD_COLORS).forEach(c => {
             const sw = document.createElement('button');
@@ -2670,7 +2672,7 @@ class Plugin extends AppPlugin {
     _openModal(el) {
         if (!this._activeModals) this._activeModals = [];
         this._activeModals.push(el);
-        el.classList.add('pm-container');
+        el.classList.add('pm-tokens');
         document.body.appendChild(el);
         
         // Close modal when clicking outside its content area (on the background overlay)
@@ -2727,7 +2729,7 @@ class Plugin extends AppPlugin {
             const scrim = document.createElement('div');
             scrim.className = 'pm-confirm-scrim';
             scrim.innerHTML = `
-                <div class="pm-container pm-confirm-pop" role="dialog" aria-modal="true">
+                <div class="pm-tokens pm-confirm-pop" role="dialog" aria-modal="true">
                     <h3>${this._escHtml(title)}</h3>
                     <div class="pm-confirm-body">${body}</div>
                     <div class="pm-confirm-actions">

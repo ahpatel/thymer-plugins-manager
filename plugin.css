@@ -1,5 +1,12 @@
+/*
+ * .pm-tokens declares the design tokens WITHOUT any layout. Surfaces appended to <body>
+ * (popovers, modal wrappers) must use it rather than .pm-container — that class also carries
+ * the panel's geometry (width: 100%), which a position:fixed popover would inherit as 100%
+ * of the VIEWPORT, blowing it out to a full-width bar.
+ */
 .pm-container,
-.pm-modal {
+.pm-modal,
+.pm-tokens {
     /* Map to Thymer's standard theme variables with dark mode fallbacks */
     --pm-bg-default: var(--cards-bg, var(--color-bg-600, light-dark(#f9f9f9, #1e1e1e)));
     --pm-bg-hover: var(--cards-hover-bg, var(--hover-subtle, light-dark(#f0f0f0, #2a2a2a)));
@@ -766,6 +773,8 @@
     z-index: 10001;
     display: grid;
     grid-template-columns: repeat(6, 1fr);
+    /* Hug the swatch grid — never stretch to the width of an ancestor/viewport. */
+    width: max-content;
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--pm-border-default);
