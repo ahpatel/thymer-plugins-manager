@@ -1107,6 +1107,20 @@ class Plugin extends AppPlugin {
         return (conf && conf.__source_repo) || guid || '';
     }
 
+    // Attribution for a plugin: an explicit author field if present, else the GitHub
+    // repo owner. Returns { label, url } or null when there's nothing to show.
+    _pluginAttribution(conf) {
+        let author = (conf.author || conf.by || '').toString().trim();
+        let url = '';
+        const m = (conf.__source_repo || '').match(/github\.com\/([^\/]+)/i);
+        if (m) {
+            if (!author) author = m[1];
+            url = 'https://github.com/' + m[1];
+        }
+        if (!author) return null;
+        return { label: author, url };
+    }
+
     // Apply (or clear) a card's color tint. Full-perimeter border + subtle bg wash (CSS).
     _applyCardColor(cardEl, hex) {
         if (!cardEl) return;
@@ -1218,70 +1232,86 @@ class Plugin extends AppPlugin {
     _getDisabledPluginsForType(typeFilter) {
         const allDisabled = Object.values(this._disabledPlugins || {});
         return allDisabled.filter(item => {
-            if (!item || !item.sourceRepo) return false;
+            // Valid if it can be restored: a GitHub source to re-fetch, or stashed local code.
+            if (!item || (!item.sourceRepo && !item.code)) return false;
             const type = (item.type || '').toLowerCase();
             const normalized = (type === 'global' || type === 'app') ? 'app' : (type === 'collection' ? 'collection' : 'app');
             return normalized === typeFilter;
         });
     }
 
-    // Confirm-free core: stash the plugin's metadata (incl. its custom settings + icon so
-    // re-enabling can restore them), then trash it from Thymer. Throws on failure.
+    // Confirm-free core: stash what's needed to bring the plugin back, then trash it.
+    // GitHub plugins stash a repo pointer (re-fetched on enable); LOCAL plugins have no
+    // repo, so we stash their actual code + CSS + config to reinstall from. Throws on failure.
     // Shared by the single-card toggle and the bulk "All Off" / Safe Mode paths.
     async _disablePluginCore(pluginObj, conf) {
-        const sourceRepo = conf.__source_repo;
-        if (!sourceRepo) throw new Error('Only GitHub-linked plugins can be disabled.');
+        const guid = pluginObj.getGuid();
+        const sourceRepo = conf.__source_repo || '';
+        // Map key: repo for GitHub plugins (stable across guid churn), else a local guid key.
+        const key = sourceRepo || ('local:' + guid);
 
         const rawType = (conf.type || '').toLowerCase();
         const normalizedType = (rawType === 'collection') ? 'collection' : 'app';
 
-        this._disabledPlugins[sourceRepo] = {
+        const entry = {
+            key,
+            guid,
             name: conf.name || 'Unnamed Plugin',
             type: normalizedType,
-            sourceRepo,
+            sourceRepo: sourceRepo || null,
             sourceFiles: conf.__source_files || null,
             version: conf.version || conf.ver || '',
             icon: conf.icon || null,
             custom: conf.custom !== undefined ? this._cloneJsonValue(conf.custom) : undefined,
             dateDisabled: new Date().toISOString()
         };
+
+        // Local plugin: no upstream to reinstall from, so keep the actual code + CSS + config.
+        if (!sourceRepo) {
+            const cc = pluginObj.getExistingCodeAndConfig();
+            entry.code = cc.code || '';
+            entry.css = cc.css || '';
+            entry.json = this._cloneJsonValue(cc.json);
+        }
+
+        this._disabledPlugins[key] = entry;
         this._saveDisabledPlugins();
 
         await pluginObj.trashPlugin();
     }
 
-    // Confirm-free core: re-fetch from GitHub and reinstall, restoring the stashed custom
-    // settings blob so the user's configuration survives the off/on cycle. Throws on failure.
+    // Confirm-free core: reinstall a disabled plugin. GitHub plugins re-fetch from their repo;
+    // LOCAL plugins reinstall from the stashed code/CSS/config. Restores saved settings either
+    // way so configuration survives the off/on cycle. Throws on failure.
     async _enableDisabledPluginCore(disabledPlugin) {
-        const sourceRepo = disabledPlugin.sourceRepo;
-        const { json, js, css } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: disabledPlugin.sourceFiles });
+        const key = disabledPlugin.key || disabledPlugin.sourceRepo;
+        let name;
 
-        // Preserve the user's saved settings across the reinstall (mirrors the update path).
-        if (disabledPlugin.custom !== undefined) {
-            json.custom = this._cloneJsonValue(disabledPlugin.custom);
+        if (disabledPlugin.sourceRepo) {
+            const { json, js, css } = await this.fetchGithubRepo(disabledPlugin.sourceRepo, { sourceFiles: disabledPlugin.sourceFiles });
+            if (disabledPlugin.custom !== undefined) json.custom = this._cloneJsonValue(disabledPlugin.custom);
+            await this.installPlugin(json, js, { interactive: false, cssCode: css });
+            name = json.name || disabledPlugin.name;
+        } else {
+            // Local plugin: reinstall from the stash (no network).
+            const json = this._cloneJsonValue(disabledPlugin.json) || {};
+            if (disabledPlugin.custom !== undefined) json.custom = this._cloneJsonValue(disabledPlugin.custom);
+            await this.installPlugin(json, disabledPlugin.code || '', { interactive: false, cssCode: disabledPlugin.css || '' });
+            name = (json && json.name) || disabledPlugin.name;
         }
 
-        await this.installPlugin(json, js, { interactive: false, cssCode: css });
-
-        delete this._disabledPlugins[sourceRepo];
+        delete this._disabledPlugins[key];
         this._saveDisabledPlugins();
-        return json.name || disabledPlugin.name;
+        return name;
     }
 
     async _disablePlugin(pluginObj, conf, panelContainer) {
-        const sourceRepo = conf.__source_repo;
-        if (!sourceRepo) {
-            this.ui.addToaster({
-                title: 'Cannot Disable',
-                message: 'Only plugins linked to a GitHub source can be disabled and re-enabled.',
-                autoDestroyTime: 5000,
-                dismissible: true
-            });
-            return;
-        }
-
+        const isLocal = !conf.__source_repo;
         const pluginName = conf.name || 'this plugin';
-        if (!confirm(`Disable ${pluginName}?\n\nThis removes it from the official Plugins panel. You can re-enable it later from Plugins Manager.`)) {
+        const note = isLocal
+            ? 'This removes it from the Plugins panel. Its code is saved here so you can re-enable it anytime.'
+            : 'This removes it from the official Plugins panel. You can re-enable it later from Plugins Manager.';
+        if (!confirm(`Disable ${pluginName}?\n\n${note}`)) {
             return;
         }
 
@@ -1350,15 +1380,15 @@ class Plugin extends AppPlugin {
             if (scope === 'collection' || scope === 'all') plugins = plugins.concat(await this.data.getAllCollections());
         } catch (e) { }
 
+        // Everything except the Plugins Manager itself (disabling self would close the panel).
         const targets = plugins.filter(p => {
             try {
-                const conf = p.getExistingCodeAndConfig().json;
-                return conf && conf.__source_repo && p.getGuid() !== this.getGuid();
+                return p.getGuid() !== this.getGuid();
             } catch (e) { return false; }
         });
 
         if (targets.length === 0) {
-            this.ui.addToaster({ title: 'Nothing to turn off', message: 'No GitHub-linked plugins are currently enabled.', dismissible: true, autoDestroyTime: 4000 });
+            this.ui.addToaster({ title: 'Nothing to turn off', message: 'No other plugins are currently enabled.', dismissible: true, autoDestroyTime: 4000 });
             return { count: 0 };
         }
 
@@ -1394,7 +1424,7 @@ class Plugin extends AppPlugin {
     // Bulk "All On": re-enable every plugin currently disabled within scope.
     async _enableAllPlugins(container, scope, control) {
         const disabled = (scope === 'all')
-            ? Object.values(this._disabledPlugins || {}).filter(d => d && d.sourceRepo)
+            ? Object.values(this._disabledPlugins || {}).filter(d => d && (d.sourceRepo || d.code))
             : this._getDisabledPluginsForType(scope);
 
         if (disabled.length === 0) {
@@ -1496,7 +1526,7 @@ class Plugin extends AppPlugin {
             actionsContainer.appendChild(disabledSwitch);
 
             // Carry over any stored color tint (keyed by source repo) for visual continuity.
-            this._applyCardColor(card, this._pluginColors[disabled.sourceRepo || ''] || null);
+            this._applyCardColor(card, this._pluginColors[disabled.sourceRepo || disabled.guid || ''] || null);
             container.appendChild(card);
         });
     }
@@ -1553,6 +1583,7 @@ class Plugin extends AppPlugin {
                         <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
                         ${sourceRepo ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source"></span>` : ''}
                     </h3>
+                    <div class="pm-card-attr" id="pm-attr-${p.getGuid()}"></div>
                     <p>${this._escHtml(conf.description || 'No description')}</p>
                     ${sourceRepo ? `<p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(sourceRepo)}">${this._escHtml(sourceRepo)}</span></p>` : ''}
                 </div>
@@ -1567,6 +1598,24 @@ class Plugin extends AppPlugin {
                 } catch (e) {
                     try { iconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
                 }
+            }
+
+            // Attribution line under the title (author, or GitHub repo owner).
+            const attrSlot = card.querySelector(`#pm-attr-${p.getGuid()}`);
+            const attr = this._pluginAttribution(conf);
+            if (attrSlot && attr) {
+                attrSlot.appendChild(document.createTextNode('by '));
+                if (attr.url) {
+                    const link = document.createElement('span');
+                    link.className = 'pm-card-attr-link';
+                    link.textContent = attr.label;
+                    link.setAttribute('data-external-url', attr.url);
+                    attrSlot.appendChild(link);
+                } else {
+                    attrSlot.appendChild(document.createTextNode(attr.label));
+                }
+            } else if (attrSlot) {
+                attrSlot.remove();
             }
 
             const actionsContainer = card.querySelector('.pm-card-actions');
@@ -1704,12 +1753,12 @@ class Plugin extends AppPlugin {
                 }
             });
 
-            // Enabled/disabled toggle (GitHub-linked plugins only). ON = enabled.
+            // Enabled/disabled toggle. ON = enabled. Works for GitHub and local plugins
+            // (local code is stashed on disable so it can be restored on enable).
             const enabledSwitch = this._createToggleSwitch({
                 on: true,
-                disabled: !sourceRepo,
-                title: sourceRepo ? 'Enabled — turn off to disable (remove from Plugins panel)' : 'Link this plugin to GitHub first to enable disable/re-enable',
-                ariaLabel: sourceRepo ? `${conf.name || 'Plugin'} enabled. Turn off to disable.` : 'Disable unavailable until this plugin is linked to GitHub',
+                title: 'Enabled — turn off to disable (remove from Plugins panel)',
+                ariaLabel: `${conf.name || 'Plugin'} enabled. Turn off to disable.`,
                 onToggle: () => this._disablePlugin(p, conf, panelContainer)
             });
             actionsContainer.appendChild(enabledSwitch);

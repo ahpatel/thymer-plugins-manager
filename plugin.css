@@ -219,7 +219,7 @@
  * badges to wrap to a new line if the card is too narrow to fit them inline.
  */
 .pm-card-info h3 {
-    margin: 0 0 10px 0;
+    margin: 0 0 6px 0;
     font-size: 16px;
     display: flex;
     align-items: center;
@@ -232,6 +232,29 @@
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
+}
+
+/* Attribution line under the title (author / GitHub owner). */
+.pm-card-attr {
+    font-size: 12px;
+    color: var(--pm-text-muted);
+    margin: 0 0 12px 0;
+}
+
+.pm-card-attr:empty {
+    display: none;
+}
+
+.pm-card-attr-link {
+    color: var(--pm-link);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--pm-link) 50%, transparent);
+    text-underline-offset: 2px;
+}
+
+.pm-card-attr-link:hover {
+    text-decoration-color: var(--pm-link);
 }
 
 .pm-card-info h3 .pm-badge {
