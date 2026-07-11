@@ -336,6 +336,7 @@ class Plugin extends AppPlugin {
                             <span class="pm-header-version">v${this._escHtml(this._selfVersion)}</span>
                             <span class="pm-gh-glyph pm-gh-mark" aria-hidden="true"></span>
                         </span>
+                        <span id="pm-header-self-update-btn" class="pm-badge pm-version-badge update pm-hidden" role="button" tabindex="0" style="cursor: pointer;"></span>
                     </div>
                 </div>
                 
@@ -837,6 +838,32 @@ class Plugin extends AppPlugin {
         };
         setupDrawer('global');
         setupDrawer('col');
+
+        // Setup self-update badge if an update is available for the Plugins Manager itself
+        const selfUpdateBtn = container.querySelector('#pm-header-self-update-btn');
+        if (selfUpdateBtn) {
+            const updates = this._readUpdateCache();
+            const selfUpdateInfo = updates[this.getGuid()];
+            if (selfUpdateInfo && selfUpdateInfo.version) {
+                selfUpdateBtn.textContent = `Update Available (v${selfUpdateInfo.version})`;
+                selfUpdateBtn.classList.remove('pm-hidden');
+                
+                selfUpdateBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const p = this;
+                    const conf = this.getConfiguration();
+                    const sourceRepo = this._selfRepo;
+                    try {
+                        selfUpdateBtn.disabled = true;
+                        selfUpdateBtn.textContent = 'Updating...';
+                        await this.checkAndUpdatePlugin(p, conf, sourceRepo, selfUpdateBtn, container, selfUpdateInfo.version);
+                    } catch (err) {
+                        selfUpdateBtn.disabled = false;
+                        selfUpdateBtn.textContent = `Update Available (v${selfUpdateInfo.version})`;
+                    }
+                });
+            }
+        }
 
         // Delegated handler for external links (replaces <a target="_blank"> which is blocked in some environments)
         container.addEventListener('click', (e) => {

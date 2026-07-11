@@ -1069,6 +1069,12 @@
     font-weight: 600;
 }
 
+#pm-header-self-update-btn:hover {
+    background: color-mix(in srgb, var(--pm-update) 30%, var(--pm-bg-default));
+    border-color: var(--pm-update);
+}
+
+
 .pm-card-upgradeable {
     border-color: color-mix(in srgb, var(--pm-update) 45%, var(--pm-border-default));
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--pm-update) 15%, transparent), var(--pm-shadow-card);
