@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.19.1';
+const PM_VERSION = '1.19.4';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -1971,7 +1971,9 @@ class Plugin extends AppPlugin {
             ariaLabel: `${disabled.name || 'Plugin'} disabled. Turn on to enable.`,
             onToggle: (sw) => this._enableDisabledPlugin(disabled, panelContainer, sw)
         });
-        actionsContainer.appendChild(disabledSwitch);
+        // Appended LAST (below), not here: the switch is pinned to the far right of the row via
+        // margin-left:auto, which only lands correctly if it is the final child — same order as
+        // the live card, so both card types read identically.
 
         // Disabled plugins can be color-tagged too (same key, so the tag survives re-enabling).
         const actionsWrapper = document.createElement('div');
@@ -2008,6 +2010,9 @@ class Plugin extends AppPlugin {
             actionsWrapper.classList.remove('pm-open');
             card.classList.remove('pm-menu-open');
         });
+
+        // Last child, so it pins to the far right of the row (see .pm-card-actions > .pm-switch).
+        actionsContainer.appendChild(disabledSwitch);
 
         return card;
     }
@@ -2225,7 +2230,7 @@ class Plugin extends AppPlugin {
 
         // Always offer to link or edit a GitHub repo for updates
         const linkBtn = document.createElement('button');
-        linkBtn.className = 'pm-btn';
+        linkBtn.className = 'pm-btn pm-btn-link';
         linkBtn.title = sourceRepo ? 'Edit GitHub repo link' : 'Link to a GitHub repo for updates';
         linkBtn.appendChild(this.ui.createIcon('link'));
         const linkLabel = document.createElement('span');
