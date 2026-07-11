@@ -1190,7 +1190,9 @@ class Plugin extends AppPlugin {
             const btnId = typeFilter === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
             const updateAllBtn = panelContainer.querySelector(btnId);
             if (updateAllBtn) {
-                updateAllBtn.style.display = hasUpdatesForTab ? 'inline-block' : 'none';
+                // Toggle the class rather than inline display: `.pm-hidden` uses
+                // `display: none !important`, which an inline style cannot override.
+                updateAllBtn.classList.toggle('pm-hidden', !hasUpdatesForTab);
             }
         } catch (e) { }
 
@@ -2956,15 +2958,17 @@ class Plugin extends AppPlugin {
 
         let successCount = 0;
         let failedNames = [];
-        let deletedCount = 0;
+        const total = pluginsToUpdate.length;
 
-        for (const p of pluginsToUpdate) {
+        for (let i = 0; i < pluginsToUpdate.length; i++) {
+            const p = pluginsToUpdate[i];
+            btn.textContent = `Updating… (${i + 1}/${total})`;
             try {
                 const conf = p.getExistingCodeAndConfig().json;
                 const sourceRepo = conf.__source_repo;
                 if (!sourceRepo) continue;
 
-                // Call checkAndUpdatePlugin but bypassing UI prompts and buttons
+                // Fetch + validate remote, mirroring checkAndUpdatePlugin without its UI prompts
                 const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
 
                 this._validatePluginJS(remoteJson.name, remoteJs);
@@ -2980,24 +2984,24 @@ class Plugin extends AppPlugin {
                     await p.saveCSS(sanitizedCSS);
                 }
 
-                // Clear from known updates
-                delete availableUpdates[p.getGuid()];
-                this._writeUpdateCache(availableUpdates);
-                this._updateStatusBarIcon();
-
                 if (isSelfUpdate) {
+                    // Saving self tears down this plugin's context immediately, so record
+                    // success and clear the cache BEFORE the save, then save last.
+                    successCount++;
+                    delete availableUpdates[p.getGuid()];
+                    this._writeUpdateCache(availableUpdates);
+                    this._updateStatusBarIcon();
+                    localStorage.setItem('pm_self_update_pending', 'true');
                     const panel = this.ui.getActivePanel();
                     if (panel) this.ui.closePanel(panel);
-                    localStorage.setItem('pm_self_update_pending', 'true');
+                    await p.savePlugin(sanitizedConf, remoteJs);
                 } else {
-                    this._autoExport(); // fire-and-forget
-                    this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
-                }
-
-                await p.savePlugin(sanitizedConf, remoteJs);
-
-                if (!isSelfUpdate) {
-                    this.loadPlugins(container);
+                    await p.savePlugin(sanitizedConf, remoteJs);
+                    // Only mark as updated once the save has actually succeeded.
+                    successCount++;
+                    delete availableUpdates[p.getGuid()];
+                    this._writeUpdateCache(availableUpdates);
+                    this._updateStatusBarIcon();
                 }
             } catch (e) {
                 console.error(e);
@@ -3015,7 +3019,6 @@ class Plugin extends AppPlugin {
         btn.disabled = false;
 
         const parts = [`Successfully updated: ${successCount}`];
-        if (deletedCount > 0) parts.push(`Deleted: ${deletedCount}`);
         if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
 
         this.ui.addToaster({
