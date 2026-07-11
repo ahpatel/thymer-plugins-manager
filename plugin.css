@@ -451,24 +451,39 @@
     opacity: 0.9;
 }
 
-/* Plugin icon: its own line above the name (left-aligned), larger. */
+/* Hero plugin icon: seated in a rounded tile on its own line above the name. */
 .pm-card-iconrow {
-    display: flex;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background: var(--pm-bg-hover);
+    border: 1px solid var(--pm-border-default);
+    color: var(--pm-text-color);
+    margin-bottom: 12px;
     line-height: 0;
-    margin-bottom: 8px;
-    color: var(--pm-text-muted);
 }
 
 .pm-card-icon {
     display: inline-flex;
     align-items: center;
     flex: 0 0 auto;
-    color: var(--pm-text-muted);
+    color: inherit;
 }
 
 .pm-card-icon svg {
-    width: 44px;
-    height: 44px;
+    width: 32px;
+    height: 32px;
+    stroke-width: 1.75;
+}
+
+/* When a card is color-tagged, the hero tile adopts the group color. */
+.pm-card[data-colored] .pm-card-iconrow {
+    background: color-mix(in srgb, var(--pm-card-accent) 16%, var(--pm-bg-hover));
+    border-color: color-mix(in srgb, var(--pm-card-accent) 40%, var(--pm-border-default));
+    color: var(--pm-card-accent);
 }
 
 /* Meta row under the title: version # github/local. */
