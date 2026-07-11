@@ -219,8 +219,16 @@
  * badges to wrap to a new line if the card is too narrow to fit them inline.
  */
 .pm-card-info h3 {
-    margin: 0 0 4px 0;
+    margin: 0 0 6px 0;
     font-size: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.pm-card-name {
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
@@ -456,9 +464,9 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 56px;
-    height: 56px;
-    border-radius: 14px;
+    width: 60px;
+    height: 60px;
+    border-radius: 15px;
     background: var(--pm-bg-hover);
     border: 1px solid var(--pm-border-default);
     color: var(--pm-text-color);
@@ -466,16 +474,20 @@
     line-height: 0;
 }
 
+/* Sized box so the glyph fills it regardless of the SVG's intrinsic attributes. */
 .pm-card-icon {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     flex: 0 0 auto;
+    width: 38px;
+    height: 38px;
     color: inherit;
 }
 
 .pm-card-icon svg {
-    width: 32px;
-    height: 32px;
+    width: 100%;
+    height: 100%;
     stroke-width: 1.75;
 }
 
@@ -510,6 +522,15 @@
     mask-repeat: no-repeat;
     -webkit-mask-size: 100% 100%;
     mask-size: 100% 100%;
+}
+
+/* GitHub source mark shown inline after the version (no label; nothing for local). */
+.pm-gh-mark {
+    width: 15px;
+    height: 15px;
+    margin-right: 0;
+    vertical-align: -3px;
+    color: var(--pm-text-muted);
 }
 
 /* Per-card color tag: full-perimeter border + subtle background wash. */
