@@ -1,10 +1,8 @@
-node_modules
-dist
-.DS_Store
-Thumbs.db
-*.swp
-cache
-icons.txt
-package.json
-package-lock.json
-thymer-backup-*
+# Ignore everything by default
+*
+
+# Whitelist allowed files
+!plugin.js
+!plugin.json
+!plugin.css
+!.gitignore

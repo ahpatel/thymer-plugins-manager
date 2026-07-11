@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.17.1';
+const PM_VERSION = '1.19.0';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -142,6 +142,16 @@ class Plugin extends AppPlugin {
 
         // Start automated update checker
         this.startAutomatedUpdateChecker();
+
+        // Close dropdown menu if user clicks outside
+        this._globalMenuCloseHandler = (e) => {
+            if (!e.target.closest('.pm-card-overflow-trigger') && !e.target.closest('.pm-card-actions-wrapper')) {
+                document.querySelectorAll('.pm-card-actions-wrapper.pm-open').forEach(el => {
+                    el.classList.remove('pm-open');
+                });
+            }
+        };
+        document.addEventListener('click', this._globalMenuCloseHandler);
     }
 
     onUnload() {
@@ -176,6 +186,10 @@ class Plugin extends AppPlugin {
         if (this._tooltipCleanup) {
             try { this._tooltipCleanup(); } catch (e) { }
             this._tooltipCleanup = null;
+        }
+        if (this._globalMenuCloseHandler) {
+            document.removeEventListener('click', this._globalMenuCloseHandler);
+            this._globalMenuCloseHandler = null;
         }
     }
 
@@ -337,11 +351,14 @@ class Plugin extends AppPlugin {
                     <div class="pm-tab-toolbar">
                         <div class="pm-tab-actions pm-tab-actions-primary">
                             <button class="pm-btn primary" id="pm-install-global-btn">Install Plugin</button>
+                            <button class="pm-btn pm-drawer-toggle" id="pm-drawer-toggle-global">More ▾</button>
+                        </div>
+                    </div>
+                    <div class="pm-drawer pm-hidden" id="pm-drawer-global">
+                        <div class="pm-drawer-content">
                             <button class="pm-btn" id="pm-import-global-btn">Restore Plugins</button>
                             <button class="pm-btn" id="pm-export-global-btn">Backup Plugins</button>
-                        </div>
-                        <div class="pm-tab-actions pm-tab-actions-secondary">
-                            <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for plugin updates"><span class="pm-btn-icon" aria-hidden="true">↻</span></button>
+                            <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for plugin updates"><span class="pm-btn-icon" aria-hidden="true">↻</span> Check Updates</button>
                             <button class="pm-btn pm-btn-update update-btn pm-hidden" id="pm-update-all-global-btn">Update All</button>
                             <button class="pm-btn pm-btn-alloff" id="pm-disable-all-global-btn" title="Turn off all plugins">All Off</button>
                             <button class="pm-btn pm-btn-allon" id="pm-enable-all-global-btn" title="Turn all disabled plugins back on">All On</button>
@@ -373,11 +390,14 @@ class Plugin extends AppPlugin {
                     <div class="pm-tab-toolbar">
                         <div class="pm-tab-actions pm-tab-actions-primary">
                             <button class="pm-btn primary" id="pm-install-col-btn">Install Collection Plugin</button>
+                            <button class="pm-btn pm-drawer-toggle" id="pm-drawer-toggle-col">More ▾</button>
+                        </div>
+                    </div>
+                    <div class="pm-drawer pm-hidden" id="pm-drawer-col">
+                        <div class="pm-drawer-content">
                             <button class="pm-btn" id="pm-import-col-btn">Restore Collections</button>
                             <button class="pm-btn" id="pm-export-col-btn">Backup Collections</button>
-                        </div>
-                        <div class="pm-tab-actions pm-tab-actions-secondary">
-                            <button class="pm-btn pm-btn-update" id="pm-check-updates-col-btn" title="Check for collection updates"><span class="pm-btn-icon" aria-hidden="true">↻</span></button>
+                            <button class="pm-btn pm-btn-update" id="pm-check-updates-col-btn" title="Check for collection updates"><span class="pm-btn-icon" aria-hidden="true">↻</span> Check Updates</button>
                             <button class="pm-btn pm-btn-update update-btn pm-hidden" id="pm-update-all-col-btn">Update All</button>
                             <button class="pm-btn pm-btn-alloff" id="pm-disable-all-col-btn" title="Turn off all collection plugins">All Off</button>
                             <button class="pm-btn pm-btn-allon" id="pm-enable-all-col-btn" title="Turn all disabled collection plugins back on">All On</button>
@@ -797,6 +817,26 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-export-workspace-btn').addEventListener('click', () => this.showExportDialog('all'));
         container.querySelector('#pm-import-workspace-btn').addEventListener('click', () => this.showImportDialog(container, 'all'));
         container.querySelector('#pm-export-workspace-themes-btn').addEventListener('click', () => this._exportAllThemes());
+
+        // Setup collapsible Bulk Operations drawers
+        const setupDrawer = (tabId) => {
+            const btn = container.querySelector(`#pm-drawer-toggle-${tabId}`);
+            const drawer = container.querySelector(`#pm-drawer-${tabId}`);
+            if (btn && drawer) {
+                btn.addEventListener('click', () => {
+                    drawer.classList.toggle('pm-hidden');
+                    if (drawer.classList.contains('pm-hidden')) {
+                        btn.innerText = 'More ▾';
+                        btn.classList.remove('active');
+                    } else {
+                        btn.innerText = 'More ▴';
+                        btn.classList.add('active');
+                    }
+                });
+            }
+        };
+        setupDrawer('global');
+        setupDrawer('col');
 
         // Delegated handler for external links (replaces <a target="_blank"> which is blocked in some environments)
         container.addEventListener('click', (e) => {
@@ -1282,7 +1322,7 @@ class Plugin extends AppPlugin {
                     <h3 class="pm-card-title">
                         <span class="pm-card-name">${this._escHtml(item.name)}</span>
                         <span class="pm-badge pm-version-badge${knownVersion ? '' : ' pm-hidden'}" data-discover-ver>${knownVersion ? 'v' + this._escHtml(knownVersion) : ''}</span>
-                        ${isGithubSrc ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source"></span>` : ''}
+                        ${isGithubSrc ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source" data-external-url="${this._escHtml(item.url)}" role="link" tabindex="0"></span>` : ''}
                     </h3>
                     <div class="pm-card-attr" data-discover-attr></div>
                     <p>${this._escHtml(item.description)}</p>
@@ -1907,7 +1947,41 @@ class Plugin extends AppPlugin {
         actionsContainer.appendChild(disabledSwitch);
 
         // Disabled plugins can be color-tagged too (same key, so the tag survives re-enabling).
-        this._attachColorButton(card, actionsContainer, this._ghostColorKey(disabled), panelContainer, typeFilter);
+        const actionsWrapper = document.createElement('div');
+        actionsWrapper.className = 'pm-card-actions-wrapper';
+        this._attachColorButton(card, actionsWrapper, this._ghostColorKey(disabled), panelContainer, typeFilter);
+        actionsContainer.appendChild(actionsWrapper);
+
+        // Responsive overflow menu trigger button for small screens
+        const triggerBtn = document.createElement('button');
+        triggerBtn.className = 'pm-btn pm-card-overflow-trigger';
+        triggerBtn.title = 'More Actions';
+        try {
+            triggerBtn.appendChild(this.ui.createIcon('dots-vertical'));
+        } catch (e) {
+            triggerBtn.textContent = '⋮';
+        }
+        actionsContainer.appendChild(triggerBtn);
+
+        triggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = actionsWrapper.classList.contains('pm-open');
+            document.querySelectorAll('.pm-card-actions-wrapper.pm-open').forEach(el => {
+                el.classList.remove('pm-open');
+            });
+            document.querySelectorAll('.pm-card.pm-menu-open').forEach(el => {
+                el.classList.remove('pm-menu-open');
+            });
+            if (!isOpen) {
+                actionsWrapper.classList.add('pm-open');
+                card.classList.add('pm-menu-open');
+            }
+        });
+        actionsWrapper.addEventListener('click', () => {
+            actionsWrapper.classList.remove('pm-open');
+            card.classList.remove('pm-menu-open');
+        });
+
         return card;
     }
 
@@ -1933,7 +2007,17 @@ class Plugin extends AppPlugin {
 
         const colorBtn = document.createElement('button');
         colorBtn.type = 'button';
-        colorBtn.className = 'pm-color-btn';
+        colorBtn.className = 'pm-color-btn pm-btn';
+
+        const dot = document.createElement('span');
+        dot.className = 'pm-color-btn-dot';
+        colorBtn.appendChild(dot);
+
+        const label = document.createElement('span');
+        label.className = 'pm-btn-label';
+        label.textContent = 'Card Color';
+        colorBtn.appendChild(label);
+
         this._updateColorBtn(colorBtn, storedHex);
         actionsContainer.appendChild(colorBtn);
 
@@ -1959,17 +2043,17 @@ class Plugin extends AppPlugin {
 
     // Build one live plugin card. Returns the element; the caller appends it.
     _renderLiveCard(p, conf, panelContainer, availableUpdates, typeFilter) {
-            const sourceRepo = conf.__source_repo || '';
+        const sourceRepo = conf.__source_repo || '';
 
-            const card = document.createElement('div');
-            card.className = 'pm-card';
-            card.innerHTML = `
+        const card = document.createElement('div');
+        card.className = 'pm-card';
+        card.innerHTML = `
                 <div class="pm-card-iconrow"><span class="pm-card-icon" id="pm-icon-${p.getGuid()}" aria-hidden="true"></span></div>
                 <div class="pm-card-info">
                     <h3 id="pm-title-${p.getGuid()}" class="pm-card-title">
                         <span class="pm-card-name">${this._escHtml(conf.name || 'Unnamed Plugin')}</span>
                         <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
-                        ${sourceRepo ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source"></span>` : ''}
+                        ${sourceRepo ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source" data-external-url="${this._escHtml(sourceRepo)}" role="link" tabindex="0"></span>` : ''}
                     </h3>
                     <div class="pm-card-attr" id="pm-attr-${p.getGuid()}"></div>
                     <p>${this._escHtml(conf.description || 'No description')}</p>
@@ -1978,182 +2062,242 @@ class Plugin extends AppPlugin {
                 <div class="pm-card-actions"></div>
             `;
 
-            // Add the plugin's own icon (Tabler name from its manifest; falls back to 'box')
-            const iconSlot = card.querySelector(`#pm-icon-${p.getGuid()}`);
-            if (iconSlot) {
+        // Add the plugin's own icon (Tabler name from its manifest; falls back to 'box')
+        const iconSlot = card.querySelector(`#pm-icon-${p.getGuid()}`);
+        if (iconSlot) {
+            try {
+                iconSlot.appendChild(this.ui.createIcon(conf.icon || 'box'));
+            } catch (e) {
+                try { iconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
+            }
+        }
+
+        // Attribution line under the title (author, or GitHub repo owner).
+        const attrSlot = card.querySelector(`#pm-attr-${p.getGuid()}`);
+        const attr = this._pluginAttribution(conf);
+        if (attrSlot && attr) {
+            attrSlot.appendChild(document.createTextNode('by '));
+            if (attr.url) {
+                const link = document.createElement('span');
+                link.className = 'pm-card-attr-link';
+                link.textContent = attr.label;
+                link.setAttribute('data-external-url', attr.url);
+                attrSlot.appendChild(link);
+            } else {
+                attrSlot.appendChild(document.createTextNode(attr.label));
+            }
+        } else if (attrSlot) {
+            attrSlot.remove();
+        }
+
+        const actionsContainer = card.querySelector('.pm-card-actions');
+
+        // Update availability (cache passed in — read once per render, not per card)
+        const updates = availableUpdates || {};
+        const updateInfo = updates[p.getGuid()];
+        const remoteVersion = updateInfo ? updateInfo.version : null;
+        const installedVersion = conf.version || conf.ver;
+
+        if (remoteVersion && remoteVersion !== installedVersion) {
+            card.classList.add('pm-card-upgradeable');
+            const badge = card.querySelector(`#vbadge-${p.getGuid()}`);
+            if (badge) {
+                badge.innerText = `Update Available (v${remoteVersion})`;
+                badge.classList.add('update');
+            }
+        }
+
+        // Add Native Update Button
+        let updateBtn = null;
+        let reinstallBtn = null;
+        if (sourceRepo) {
+            // Known update version (string) if background checker flagged one
+            const knownUpdate = (remoteVersion && remoteVersion !== installedVersion) ? remoteVersion : null;
+
+            updateBtn = document.createElement('button');
+            updateBtn.className = knownUpdate ? 'pm-btn pm-btn-update update-btn' : 'pm-btn pm-btn-update';
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'pm-btn-label';
+            labelSpan.textContent = knownUpdate ? `Update (v${knownUpdate})` : 'Check Update';
+
+            if (knownUpdate) {
+                updateBtn.title = `Update to v${knownUpdate}`;
+                updateBtn.appendChild(this.ui.createIcon('arrow-up'));
+                updateBtn.classList.add('update-btn');
+            } else {
+                updateBtn.title = 'Check Update';
+                updateBtn.appendChild(this.ui.createIcon('refresh'));
+            }
+            updateBtn.appendChild(labelSpan);
+
+            const pendingVersion = knownUpdate;
+            updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer, pendingVersion));
+
+            // Reinstall button — force re-download from source without version check
+            reinstallBtn = document.createElement('button');
+            reinstallBtn.className = 'pm-btn pm-btn-reinstall';
+            reinstallBtn.title = 'Reinstall from source (force overwrite)';
+            reinstallBtn.appendChild(this.ui.createIcon('download'));
+            const reinstallLabel = document.createElement('span');
+            reinstallLabel.className = 'pm-btn-label';
+            reinstallLabel.textContent = 'Reinstall';
+            reinstallBtn.appendChild(reinstallLabel);
+
+            reinstallBtn.addEventListener('click', async () => {
+                if (!await this._showConfirmModal('Reinstall from source', `Reinstall ${conf.name} from source?\nThis will overwrite local code with the latest from GitHub, even if the version number hasn't changed.`, { confirmText: 'Reinstall', danger: true })) return;
                 try {
-                    iconSlot.appendChild(this.ui.createIcon(conf.icon || 'box'));
-                } catch (e) {
-                    try { iconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
-                }
-            }
+                    reinstallBtn.innerHTML = '';
+                    reinstallBtn.appendChild(this.ui.createIcon('loader'));
+                    const reinstallLoadLabel = document.createElement('span');
+                    reinstallLoadLabel.className = 'pm-btn-label';
+                    reinstallLoadLabel.textContent = 'Reinstalling...';
+                    reinstallBtn.appendChild(reinstallLoadLabel);
+                    reinstallBtn.disabled = true;
 
-            // Attribution line under the title (author, or GitHub repo owner).
-            const attrSlot = card.querySelector(`#pm-attr-${p.getGuid()}`);
-            const attr = this._pluginAttribution(conf);
-            if (attrSlot && attr) {
-                attrSlot.appendChild(document.createTextNode('by '));
-                if (attr.url) {
-                    const link = document.createElement('span');
-                    link.className = 'pm-card-attr-link';
-                    link.textContent = attr.label;
-                    link.setAttribute('data-external-url', attr.url);
-                    attrSlot.appendChild(link);
-                } else {
-                    attrSlot.appendChild(document.createTextNode(attr.label));
-                }
-            } else if (attrSlot) {
-                attrSlot.remove();
-            }
-
-            const actionsContainer = card.querySelector('.pm-card-actions');
-
-            // Update availability (cache passed in — read once per render, not per card)
-            const updates = availableUpdates || {};
-            const updateInfo = updates[p.getGuid()];
-            const remoteVersion = updateInfo ? updateInfo.version : null;
-            const installedVersion = conf.version || conf.ver;
-
-            if (remoteVersion && remoteVersion !== installedVersion) {
-                card.classList.add('pm-card-upgradeable');
-                const badge = card.querySelector(`#vbadge-${p.getGuid()}`);
-                if (badge) {
-                    badge.innerText = `Update Available (v${remoteVersion})`;
-                    badge.classList.add('update');
-                }
-            }
-
-            // Add Native Update Button
-            let updateBtn = null;
-            if (sourceRepo) {
-                // Known update version (string) if background checker flagged one
-                const knownUpdate = (remoteVersion && remoteVersion !== installedVersion) ? remoteVersion : null;
-
-                updateBtn = document.createElement('button');
-                updateBtn.className = knownUpdate ? 'pm-btn pm-btn-update update-btn' : 'pm-btn pm-btn-update';
-
-                if (knownUpdate) {
-                    updateBtn.title = `Update to v${knownUpdate}`;
-                    updateBtn.appendChild(this.ui.createIcon('arrow-up'));
-                    updateBtn.classList.add('update-btn');
-                } else {
-                    updateBtn.title = 'Check Update';
-                    updateBtn.appendChild(this.ui.createIcon('refresh'));
-                }
-                actionsContainer.appendChild(updateBtn);
-
-                const pendingVersion = knownUpdate;
-                updateBtn.addEventListener('click', () => this.checkAndUpdatePlugin(p, conf, sourceRepo, updateBtn, panelContainer, pendingVersion));
-
-                // Reinstall button — force re-download from source without version check
-                const reinstallBtn = document.createElement('button');
-                reinstallBtn.className = 'pm-btn pm-btn-reinstall';
-                reinstallBtn.title = 'Reinstall from source (force overwrite)';
-                reinstallBtn.appendChild(this.ui.createIcon('download'));
-                actionsContainer.appendChild(reinstallBtn);
-
-                reinstallBtn.addEventListener('click', async () => {
-                    if (!await this._showConfirmModal('Reinstall from source', `Reinstall ${conf.name} from source?\nThis will overwrite local code with the latest from GitHub, even if the version number hasn't changed.`, { confirmText: 'Reinstall', danger: true })) return;
-                    try {
-                        reinstallBtn.innerHTML = '';
-                        reinstallBtn.appendChild(this.ui.createIcon('loader'));
-                        reinstallBtn.disabled = true;
-
-                        const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
-                        this._validatePluginJS(remoteJson.name, remoteJs);
-                        const sanitizedConf = this._sanitizePluginConfig(remoteJson);
-                        if (conf.custom !== undefined) {
-                            sanitizedConf.custom = this._cloneJsonValue(conf.custom);
-                        }
-
-                        const isSelfUpdate = p.getGuid() === this.getGuid();
-
-                        if (remoteCss) {
-                            const sanitizedCSS = this._sanitizeCSS(remoteCss);
-                            await p.saveCSS(sanitizedCSS);
-                        }
-
-                        if (isSelfUpdate) {
-                            const panel = this.ui.getActivePanel();
-                            if (panel) this.ui.closePanel(panel);
-                            localStorage.setItem('pm_self_update_pending', 'true');
-                        } else {
-                            this._autoExport(); // fire-and-forget
-                            this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
-                        }
-
-                        await p.savePlugin(sanitizedConf, remoteJs);
-
-                        if (!isSelfUpdate) {
-                            this.loadPlugins(panelContainer);
-                        }
-                    } catch (e) {
-                        this.ui.addToaster({ title: 'Reinstall Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
-                        reinstallBtn.innerHTML = '';
-                        reinstallBtn.appendChild(this.ui.createIcon('download-cloud'));
-                        reinstallBtn.disabled = false;
+                    const { json: remoteJson, js: remoteJs, css: remoteCss } = await this.fetchGithubRepo(sourceRepo, { sourceFiles: conf.__source_files });
+                    this._validatePluginJS(remoteJson.name, remoteJs);
+                    const sanitizedConf = this._sanitizePluginConfig(remoteJson);
+                    if (conf.custom !== undefined) {
+                        sanitizedConf.custom = this._cloneJsonValue(conf.custom);
                     }
-                });
+
+                    const isSelfUpdate = p.getGuid() === this.getGuid();
+
+                    if (remoteCss) {
+                        const sanitizedCSS = this._sanitizeCSS(remoteCss);
+                        await p.saveCSS(sanitizedCSS);
+                    }
+
+                    if (isSelfUpdate) {
+                        const panel = this.ui.getActivePanel();
+                        if (panel) this.ui.closePanel(panel);
+                        localStorage.setItem('pm_self_update_pending', 'true');
+                    } else {
+                        this._autoExport(); // fire-and-forget
+                        this.ui.addToaster({ title: 'Reinstalled', message: `${conf.name} has been reinstalled from source.`, autoDestroyTime: 3000, dismissible: true });
+                    }
+
+                    await p.savePlugin(sanitizedConf, remoteJs);
+
+                    if (!isSelfUpdate) {
+                        this.loadPlugins(panelContainer);
+                    }
+                } catch (e) {
+                    this.ui.addToaster({ title: 'Reinstall Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
+                    reinstallBtn.innerHTML = '';
+                    reinstallBtn.appendChild(this.ui.createIcon('download-cloud'));
+                    const reinstallFailLabel = document.createElement('span');
+                    reinstallFailLabel.className = 'pm-btn-label';
+                    reinstallFailLabel.textContent = 'Reinstall';
+                    reinstallBtn.appendChild(reinstallFailLabel);
+                    reinstallBtn.disabled = false;
+                }
+            });
+        }
+
+        // Always offer to link or edit a GitHub repo for updates
+        const linkBtn = document.createElement('button');
+        linkBtn.className = 'pm-btn';
+        linkBtn.title = sourceRepo ? 'Edit GitHub repo link' : 'Link to a GitHub repo for updates';
+        linkBtn.appendChild(this.ui.createIcon('link'));
+        const linkLabel = document.createElement('span');
+        linkLabel.className = 'pm-btn-label';
+        linkLabel.textContent = 'Link Repository';
+        linkBtn.appendChild(linkLabel);
+
+        linkBtn.addEventListener('click', async () => {
+            const repoUrl = await this._showPromptModal('Link GitHub Repository', 'Enter the GitHub repo URL for this plugin:', sourceRepo || '');
+            if (repoUrl === null) return; // cancelled
+            if (repoUrl === '') {
+                // Remove link
+                if (!await this._showConfirmModal('Clear repository link', 'Clear the repository link? This will disable updates.', { confirmText: 'Clear link', danger: true })) return;
+            } else if (!this._isValidGithubUrl(repoUrl)) {
+                this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
+                return;
             }
 
-            // Always offer to link or edit a GitHub repo for updates
-            const linkBtn = document.createElement('button');
-            linkBtn.className = 'pm-btn';
-            linkBtn.title = sourceRepo ? 'Edit GitHub repo link' : 'Link to a GitHub repo for updates';
-            linkBtn.appendChild(this.ui.createIcon('link'));
-            actionsContainer.appendChild(linkBtn);
+            try {
+                const { json: currentJson, code: currentCode } = p.getExistingCodeAndConfig();
+                currentJson.__source_repo = repoUrl;
+                await p.savePlugin(currentJson, currentCode);
+                this.ui.addToaster({ title: 'Repo Updated', message: repoUrl ? `${conf.name} linked to ${repoUrl}.` : `${conf.name} link removed.`, autoDestroyTime: 4000, dismissible: true });
+                this.loadPlugins(panelContainer);
+            } catch (e) {
+                this.ui.addToaster({ title: 'Update Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
+            }
+        });
 
-            linkBtn.addEventListener('click', async () => {
-                const repoUrl = await this._showPromptModal('Link GitHub Repository', 'Enter the GitHub repo URL for this plugin:', sourceRepo || '');
-                if (repoUrl === null) return; // cancelled
-                if (repoUrl === '') {
-                    // Remove link
-                    if (!await this._showConfirmModal('Clear repository link', 'Clear the repository link? This will disable updates.', { confirmText: 'Clear link', danger: true })) return;
-                } else if (!this._isValidGithubUrl(repoUrl)) {
-                    this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
-                    return;
-                }
+        // Add Native Delete Button
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'pm-btn danger pm-btn-delete';
+        deleteBtn.title = 'Delete Plugin';
+        deleteBtn.appendChild(this.ui.createIcon('trash')); // trash usually exists in Thymer/Lucide
+        const deleteLabel = document.createElement('span');
+        deleteLabel.className = 'pm-btn-label';
+        deleteLabel.textContent = 'Delete';
+        deleteBtn.appendChild(deleteLabel);
 
-                try {
-                    const { json: currentJson, code: currentCode } = p.getExistingCodeAndConfig();
-                    currentJson.__source_repo = repoUrl;
-                    await p.savePlugin(currentJson, currentCode);
-                    this.ui.addToaster({ title: 'Repo Updated', message: repoUrl ? `${conf.name} linked to ${repoUrl}.` : `${conf.name} link removed.`, autoDestroyTime: 4000, dismissible: true });
-                    this.loadPlugins(panelContainer);
-                } catch (e) {
-                    this.ui.addToaster({ title: 'Update Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
-                }
+        deleteBtn.addEventListener('click', async () => {
+            if (await this._showConfirmModal('Delete plugin', `Are you sure you want to delete ${conf.name}?`, { confirmText: 'Delete', danger: true })) {
+                await p.trashPlugin();
+                this._autoExport(); // fire-and-forget
+                this.ui.addToaster({ title: "Plugin deleted", dismissible: true, autoDestroyTime: 3000 });
+                this.loadPlugins(panelContainer);
+            }
+        });
+
+        // Collapsible wrapper for the secondary action buttons (Update, Reinstall, Link, Delete, Color)
+        const actionsWrapper = document.createElement('div');
+        actionsWrapper.className = 'pm-card-actions-wrapper';
+        if (updateBtn) actionsWrapper.appendChild(updateBtn);
+        if (reinstallBtn) actionsWrapper.appendChild(reinstallBtn);
+        actionsWrapper.appendChild(linkBtn);
+        actionsWrapper.appendChild(deleteBtn);
+        this._attachColorButton(card, actionsWrapper, this._pluginColorKey(conf, p.getGuid()), panelContainer, typeFilter);
+        actionsContainer.appendChild(actionsWrapper);
+
+        // Responsive overflow menu trigger button for small screens
+        const triggerBtn = document.createElement('button');
+        triggerBtn.className = 'pm-btn pm-card-overflow-trigger';
+        triggerBtn.title = 'More Actions';
+        try {
+            triggerBtn.appendChild(this.ui.createIcon('dots-vertical'));
+        } catch (e) {
+            triggerBtn.textContent = '⋮';
+        }
+        actionsContainer.appendChild(triggerBtn);
+
+        triggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = actionsWrapper.classList.contains('pm-open');
+            document.querySelectorAll('.pm-card-actions-wrapper.pm-open').forEach(el => {
+                el.classList.remove('pm-open');
             });
-
-            // Add Native Delete Button
-            const deleteBtn = document.createElement('button');
-            deleteBtn.className = 'pm-btn danger pm-btn-delete';
-            deleteBtn.title = 'Delete Plugin';
-            deleteBtn.appendChild(this.ui.createIcon('trash')); // trash usually exists in Thymer/Lucide
-            actionsContainer.appendChild(deleteBtn);
-
-            deleteBtn.addEventListener('click', async () => {
-                if (await this._showConfirmModal('Delete plugin', `Are you sure you want to delete ${conf.name}?`, { confirmText: 'Delete', danger: true })) {
-                    await p.trashPlugin();
-                    this._autoExport(); // fire-and-forget
-                    this.ui.addToaster({ title: "Plugin deleted", dismissible: true, autoDestroyTime: 3000 });
-                    this.loadPlugins(panelContainer);
-                }
+            document.querySelectorAll('.pm-card.pm-menu-open').forEach(el => {
+                el.classList.remove('pm-menu-open');
             });
+            if (!isOpen) {
+                actionsWrapper.classList.add('pm-open');
+                card.classList.add('pm-menu-open');
+            }
+        });
+        actionsWrapper.addEventListener('click', () => {
+            actionsWrapper.classList.remove('pm-open');
+            card.classList.remove('pm-menu-open');
+        });
 
-            // Enabled/disabled toggle. ON = enabled. Works for GitHub and local plugins
-            // (local code is stashed on disable so it can be restored on enable).
-            const enabledSwitch = this._createToggleSwitch({
-                on: true,
-                title: 'Enabled — turn off to disable (remove from Plugins panel)',
-                ariaLabel: `${conf.name || 'Plugin'} enabled. Turn off to disable.`,
-                onToggle: () => this._disablePlugin(p, conf, panelContainer)
-            });
-            actionsContainer.appendChild(enabledSwitch);
+        // Enabled/disabled toggle. ON = enabled. Works for GitHub and local plugins
+        // (local code is stashed on disable so it can be restored on enable).
+        const enabledSwitch = this._createToggleSwitch({
+            on: true,
+            title: 'Enabled — turn off to disable (remove from Plugins panel)',
+            ariaLabel: `${conf.name || 'Plugin'} enabled. Turn off to disable.`,
+            onToggle: () => this._disablePlugin(p, conf, panelContainer)
+        });
+        actionsContainer.appendChild(enabledSwitch);
 
-            // Per-card color tag (pinned to the far bottom-right of the action row).
-            this._attachColorButton(card, actionsContainer, this._pluginColorKey(conf, p.getGuid()), panelContainer, typeFilter);
-            return card;
+        return card;
     }
 
     // --- List search / sort / filter ---
@@ -2674,7 +2818,7 @@ class Plugin extends AppPlugin {
         this._activeModals.push(el);
         el.classList.add('pm-tokens');
         document.body.appendChild(el);
-        
+
         // Close modal when clicking outside its content area (on the background overlay)
         el.addEventListener('click', (e) => {
             // Handle external link clicks inside modals
@@ -2688,7 +2832,7 @@ class Plugin extends AppPlugin {
                 this._closeModal(el);
             }
         });
-        
+
         return el;
     }
 
@@ -3282,7 +3426,12 @@ class Plugin extends AppPlugin {
     /** Detect available auto-export destinations in this runtime. */
     _detectAutoExportCaps() {
         const caps = { hasFSAccess: false, canDownload: true };
-        try { caps.hasFSAccess = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function'; } catch (e) { }
+        try {
+            const isElectron = typeof navigator !== 'undefined' &&
+                (navigator.userAgent.toLowerCase().indexOf(' electron/') > -1 ||
+                    navigator.userAgent.toLowerCase().indexOf('thymer') > -1);
+            caps.hasFSAccess = !isElectron && typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+        } catch (e) { }
         // Downloads work in any environment that provides URL.createObjectURL + <a download>
         try { caps.canDownload = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'; } catch (e) { caps.canDownload = false; }
         return caps;
@@ -3308,41 +3457,90 @@ class Plugin extends AppPlugin {
 
     /** Prompt for destination, adapting to runtime capabilities. */
     async _chooseAutoExportTarget(container) {
-        // Re-detect (in case the build updated between sessions)
-        this._autoExportCaps = this._detectAutoExportCaps();
+        if (this._choosingDir) return;
+        this._choosingDir = true;
+        try {
+            // If already set, offer to clear/reset it first
+            if (this._autoExportMode) {
+                const clear = await this._showConfirmModal('Reset Backup Destination', `Current destination: ${this._autoExportDestinationLabel()}\n\nWould you like to clear this destination?`, { confirmText: 'Clear Destination', cancelText: 'Keep Destination', danger: true });
+                if (clear) {
+                    this._autoExportDirHandle = null;
+                    this._autoExportDirName = '';
+                    this._autoExportMode = '';
+                    this._autoExportEnabled = false;
+                    localStorage.removeItem('pm_auto_export_mode');
+                    localStorage.removeItem('pm_auto_export_dir_name');
+                    localStorage.setItem('pm_auto_export', 'false');
 
-        if (this._autoExportCaps.hasFSAccess) {
-            try {
-                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-                this._autoExportDirHandle = handle;
-                this._autoExportDirName = handle.name;
-                this._autoExportMode = 'fsaccess';
-                localStorage.setItem('pm_auto_export_dir_name', handle.name);
-                localStorage.setItem('pm_auto_export_mode', 'fsaccess');
-                await this._storeAutoExportHandle(handle);
-                this._applyAutoExportUI(container, 'Directory Set', `Backups will save to: ${handle.name}`);
-            } catch (e) {
-                if (e && e.name !== 'AbortError') {
-                    // Some desktop builds expose showDirectoryPicker but it throws NotAllowedError; fall back.
-                    console.warn('[Plugins Manager] showDirectoryPicker failed, falling back to download mode:', e);
-                    this._autoExportCaps.hasFSAccess = false;
-                    await this._offerDownloadFallback(container, e.message);
+                    try {
+                        const req = indexedDB.open('plugin-manager-db', 1);
+                        req.onsuccess = (e) => {
+                            const db = e.target.result;
+                            const tx = db.transaction('handles', 'readwrite');
+                            tx.objectStore('handles').delete('autoExportDir');
+                        };
+                    } catch (e) { }
+
+                    if (container) {
+                        const lbl = container.querySelector('#pm-auto-export-dir-label');
+                        if (lbl) lbl.textContent = 'No destination selected';
+                        const toggle = container.querySelector('#pm-auto-export-toggle');
+                        if (toggle) toggle.checked = false;
+                        const hint = container.querySelector('#pm-auto-export-mode-help');
+                        if (hint) hint.textContent = this._autoExportModeHint();
+                        this._renderWorkspaceSummary(container);
+                    }
+                    await this._saveManagerSettings({ autoExportEnabled: false });
+                    this.ui.addToaster({ title: 'Destination Cleared', message: 'Automatic backups have been disabled.', autoDestroyTime: 3000, dismissible: true });
+                    return;
                 }
             }
-            return;
-        }
 
-        if (this._autoExportCaps.canDownload) {
-            await this._offerDownloadFallback(container);
-            return;
-        }
+            // Re-detect (in case the build updated between sessions)
+            this._autoExportCaps = this._detectAutoExportCaps();
 
-        this.ui.addToaster({
-            title: "Not Supported",
-            message: "This runtime does not expose a way to save files. Please use the Backup Workspace button manually.",
-            autoDestroyTime: 6000,
-            dismissible: true
-        });
+            if (this._autoExportCaps.hasFSAccess) {
+                try {
+                    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                    this._autoExportDirHandle = handle;
+                    this._autoExportDirName = handle.name;
+                    this._autoExportMode = 'fsaccess';
+                    localStorage.setItem('pm_auto_export_dir_name', handle.name);
+                    localStorage.setItem('pm_auto_export_mode', 'fsaccess');
+                    try {
+                        await this._storeAutoExportHandle(handle);
+                    } catch (storeError) {
+                        console.warn('[Plugins Manager] Failed to store directory handle in IndexedDB:', storeError);
+                    }
+                    await this._applyAutoExportUI(container, 'Directory Set', `Backups will save to: ${handle.name}`);
+                } catch (e) {
+                    if (e && e.name !== 'AbortError') {
+                        // Some desktop builds expose showDirectoryPicker but it throws NotAllowedError; fall back.
+                        console.warn('[Plugins Manager] showDirectoryPicker failed, falling back to download mode:', e);
+                        try {
+                            this.ui.addToaster({ title: "Folder Picker Error", message: e.message, autoDestroyTime: 6000, dismissible: true });
+                        } catch (toasterErr) { }
+                        this._autoExportCaps.hasFSAccess = false;
+                        await this._offerDownloadFallback(container, e.message);
+                    }
+                }
+                return;
+            }
+
+            if (this._autoExportCaps.canDownload) {
+                await this._offerDownloadFallback(container);
+                return;
+            }
+
+            this.ui.addToaster({
+                title: "Not Supported",
+                message: "This runtime does not expose a way to save files. Please use the Backup Workspace button manually.",
+                autoDestroyTime: 6000,
+                dismissible: true
+            });
+        } finally {
+            this._choosingDir = false;
+        }
     }
 
     async _offerDownloadFallback(container, originalError = '') {
