@@ -1,3 +1,19 @@
+// Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
+// and inlined so this paste-only plugin stays self-contained (no shared-module import).
+const PM_CARD_COLORS = [
+    { name: 'Slate', hex: '#64748b' },
+    { name: 'Red', hex: '#ef4444' },
+    { name: 'Orange', hex: '#f97316' },
+    { name: 'Amber', hex: '#f59e0b' },
+    { name: 'Green', hex: '#22c55e' },
+    { name: 'Teal', hex: '#14b8a6' },
+    { name: 'Cyan', hex: '#06b6d4' },
+    { name: 'Blue', hex: '#3b82f6' },
+    { name: 'Indigo', hex: '#6366f1' },
+    { name: 'Violet', hex: '#8b5cf6' },
+    { name: 'Pink', hex: '#ec4899' }
+];
+
 class Plugin extends AppPlugin {
 
     onLoad() {
@@ -10,6 +26,7 @@ class Plugin extends AppPlugin {
         this._updateIntervalId = null;
         this._activeModals = []; // track all open modals for cleanup on unload
         try { this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}'); } catch (e) { this._disabledPlugins = {}; }
+        try { this._pluginColors = JSON.parse(localStorage.getItem('pm_plugin_colors') || '{}'); } catch (e) { this._pluginColors = {}; }
         try { this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}'); } catch (e) { this._incompatiblePlugins = {}; }
         // Evict stale incompatible entries older than 30 days
         const _cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -115,6 +132,7 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
+        this._closeColorPopover();
         // Remove any dangling modals from the DOM to prevent memory leaks
         for (const modal of (this._activeModals || [])) {
             if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
@@ -1079,6 +1097,100 @@ class Plugin extends AppPlugin {
         localStorage.setItem('pm_disabled_plugins', JSON.stringify(this._disabledPlugins || {}));
     }
 
+    _savePluginColors() {
+        try { localStorage.setItem('pm_plugin_colors', JSON.stringify(this._pluginColors || {})); } catch (e) { }
+    }
+
+    // Stable key for a plugin's color: prefer the GitHub source repo (survives the
+    // disable/enable reinstall that mints a new guid); fall back to the guid.
+    _pluginColorKey(conf, guid) {
+        return (conf && conf.__source_repo) || guid || '';
+    }
+
+    // Apply (or clear) a card's color tint. Full-perimeter border + subtle bg wash (CSS).
+    _applyCardColor(cardEl, hex) {
+        if (!cardEl) return;
+        if (hex) {
+            cardEl.dataset.colored = '';
+            cardEl.style.setProperty('--pm-card-accent', hex);
+        } else {
+            delete cardEl.dataset.colored;
+            cardEl.style.removeProperty('--pm-card-accent');
+        }
+    }
+
+    _updateColorBtn(btnEl, hex) {
+        if (!btnEl) return;
+        if (hex) {
+            btnEl.dataset.hasColor = '';
+            btnEl.style.setProperty('--pm-card-accent', hex);
+            btnEl.title = 'Card color — click to change';
+        } else {
+            delete btnEl.dataset.hasColor;
+            btnEl.style.removeProperty('--pm-card-accent');
+            btnEl.title = 'Set a card color';
+        }
+    }
+
+    _closeColorPopover() {
+        if (this._colorPopover) {
+            document.removeEventListener('mousedown', this._colorPopoverOutside, true);
+            document.removeEventListener('keydown', this._colorPopoverKey, true);
+            this._colorPopover.remove();
+            this._colorPopover = null;
+        }
+    }
+
+    // Small swatch popover anchored to a card's color button. Rendered to <body> (cards
+    // are overflow:hidden); the pm-container class lets the --pm-* tokens resolve there.
+    _openColorPopover(anchorEl, currentHex, onPick) {
+        this._closeColorPopover();
+
+        const pop = document.createElement('div');
+        pop.className = 'pm-container pm-color-popover';
+
+        PM_CARD_COLORS.forEach(c => {
+            const sw = document.createElement('button');
+            sw.type = 'button';
+            sw.className = 'pm-color-swatch';
+            sw.style.background = c.hex;
+            sw.title = c.name;
+            sw.setAttribute('aria-label', c.name);
+            if (currentHex && currentHex.toLowerCase() === c.hex.toLowerCase()) sw.dataset.selected = '';
+            sw.addEventListener('click', () => { this._closeColorPopover(); onPick(c.hex); });
+            pop.appendChild(sw);
+        });
+
+        const none = document.createElement('button');
+        none.type = 'button';
+        none.className = 'pm-color-swatch pm-color-none';
+        none.title = 'No color';
+        none.setAttribute('aria-label', 'No color');
+        if (!currentHex) none.dataset.selected = '';
+        none.addEventListener('click', () => { this._closeColorPopover(); onPick(null); });
+        pop.appendChild(none);
+
+        document.body.appendChild(pop);
+
+        // Position under the button, flipping up / clamping to the viewport.
+        const r = anchorEl.getBoundingClientRect();
+        const pr = pop.getBoundingClientRect();
+        let top = r.bottom + 6;
+        if (top + pr.height > window.innerHeight - 8) top = r.top - pr.height - 6;
+        let left = r.right - pr.width;
+        if (left < 8) left = 8;
+        pop.style.top = `${Math.max(8, top)}px`;
+        pop.style.left = `${left}px`;
+
+        this._colorPopover = pop;
+        this._colorPopoverOutside = (e) => { if (!pop.contains(e.target) && e.target !== anchorEl) this._closeColorPopover(); };
+        this._colorPopoverKey = (e) => { if (e.key === 'Escape') this._closeColorPopover(); };
+        setTimeout(() => {
+            document.addEventListener('mousedown', this._colorPopoverOutside, true);
+            document.addEventListener('keydown', this._colorPopoverKey, true);
+        }, 0);
+    }
+
     // Build an accessible on/off switch (role="switch"). Returns the <button> element.
     // onToggle receives the switch element so callers can drive its pending/disabled state.
     _createToggleSwitch({ on, disabled = false, title = '', ariaLabel = '', onToggle } = {}) {
@@ -1351,9 +1463,9 @@ class Plugin extends AppPlugin {
             const card = document.createElement('div');
             card.className = 'pm-card pm-card-disabled';
             card.innerHTML = `
+                <div class="pm-card-iconrow"><span class="pm-card-icon" data-disabled-icon aria-hidden="true"></span></div>
                 <div class="pm-card-info">
                     <h3>
-                        <span class="pm-card-icon" data-disabled-icon aria-hidden="true"></span>
                         ${this._escHtml(disabled.name || 'Unnamed Plugin')}
                         <span class="pm-badge">Disabled</span>
                     </h3>
@@ -1381,6 +1493,9 @@ class Plugin extends AppPlugin {
                 onToggle: (sw) => this._enableDisabledPlugin(disabled, panelContainer, sw)
             });
             actionsContainer.appendChild(disabledSwitch);
+
+            // Carry over any stored color tint (keyed by source repo) for visual continuity.
+            this._applyCardColor(card, this._pluginColors[disabled.sourceRepo || ''] || null);
             container.appendChild(card);
         });
     }
@@ -1430,9 +1545,9 @@ class Plugin extends AppPlugin {
             const card = document.createElement('div');
             card.className = 'pm-card';
             card.innerHTML = `
+                <div class="pm-card-iconrow"><span class="pm-card-icon" id="pm-icon-${p.getGuid()}" aria-hidden="true"></span></div>
                 <div class="pm-card-info">
                     <h3 id="pm-title-${p.getGuid()}">
-                        <span class="pm-card-icon" id="pm-icon-${p.getGuid()}" aria-hidden="true"></span>
                         ${this._escHtml(conf.name || 'Unnamed Plugin')}
                         <span class="pm-badge" id="pm-badge-type-${p.getGuid()}"></span>
                         <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
@@ -1459,7 +1574,10 @@ class Plugin extends AppPlugin {
                 typeBadge.appendChild(this.ui.createIcon('box'));
                 typeBadge.appendChild(document.createTextNode(' Local'));
             } else {
-                typeBadge.appendChild(this.ui.createIcon('cloud'));
+                const ghGlyph = document.createElement('span');
+                ghGlyph.className = 'pm-gh-glyph';
+                ghGlyph.setAttribute('aria-hidden', 'true');
+                typeBadge.appendChild(ghGlyph);
                 typeBadge.appendChild(document.createTextNode(' GitHub'));
             }
 
@@ -1608,6 +1726,26 @@ class Plugin extends AppPlugin {
             });
             actionsContainer.appendChild(enabledSwitch);
 
+            // Per-card color tag (pinned to the far bottom-right of the action row).
+            const colorKey = this._pluginColorKey(conf, p.getGuid());
+            const storedHex = this._pluginColors[colorKey] || null;
+            const colorBtn = document.createElement('button');
+            colorBtn.type = 'button';
+            colorBtn.className = 'pm-color-btn';
+            this._updateColorBtn(colorBtn, storedHex);
+            actionsContainer.appendChild(colorBtn);
+            colorBtn.addEventListener('click', () => {
+                if (this._colorPopover) { this._closeColorPopover(); return; }
+                this._openColorPopover(colorBtn, this._pluginColors[colorKey] || null, (hex) => {
+                    if (hex) this._pluginColors[colorKey] = hex;
+                    else delete this._pluginColors[colorKey];
+                    this._savePluginColors();
+                    this._applyCardColor(card, hex);
+                    this._updateColorBtn(colorBtn, hex);
+                });
+            });
+
+            this._applyCardColor(card, storedHex);
             container.appendChild(card);
         });
 
