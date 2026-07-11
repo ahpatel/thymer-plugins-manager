@@ -219,12 +219,8 @@
  * badges to wrap to a new line if the card is too narrow to fit them inline.
  */
 .pm-card-info h3 {
-    margin: 0 0 5px 0;
+    margin: 0 0 4px 0;
     font-size: 16px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
     min-width: 0;
     overflow-wrap: anywhere;
     word-break: break-word;
@@ -471,8 +467,17 @@
 }
 
 .pm-card-icon svg {
-    width: 28px;
-    height: 28px;
+    width: 44px;
+    height: 44px;
+}
+
+/* Meta row under the title: version # github/local. */
+.pm-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 0 0 7px 0;
 }
 
 /* Real GitHub mark (inlined Iconify mask, painted with currentColor). */
@@ -481,6 +486,7 @@
     display: inline-block;
     width: 12px;
     height: 12px;
+    margin-right: 4px;
     vertical-align: -2px;
     background-color: currentColor;
     -webkit-mask-image: var(--pm-gh-mask);

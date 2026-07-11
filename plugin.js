@@ -1465,10 +1465,11 @@ class Plugin extends AppPlugin {
             card.innerHTML = `
                 <div class="pm-card-iconrow"><span class="pm-card-icon" data-disabled-icon aria-hidden="true"></span></div>
                 <div class="pm-card-info">
-                    <h3>
-                        ${this._escHtml(disabled.name || 'Unnamed Plugin')}
+                    <h3>${this._escHtml(disabled.name || 'Unnamed Plugin')}</h3>
+                    <div class="pm-card-meta">
+                        ${disabled.version ? `<span class="pm-badge pm-version-badge">v${this._escHtml(disabled.version)}</span>` : ''}
                         <span class="pm-badge">Disabled</span>
-                    </h3>
+                    </div>
                     <p>Disabled on ${this._escHtml(disabledDate)}. Re-enable to reinstall in the official Plugins panel.</p>
                     ${disabled.sourceRepo ? `<p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(disabled.sourceRepo)}">${this._escHtml(disabled.sourceRepo)}</span></p>` : ''}
                 </div>
@@ -1547,11 +1548,11 @@ class Plugin extends AppPlugin {
             card.innerHTML = `
                 <div class="pm-card-iconrow"><span class="pm-card-icon" id="pm-icon-${p.getGuid()}" aria-hidden="true"></span></div>
                 <div class="pm-card-info">
-                    <h3 id="pm-title-${p.getGuid()}">
-                        ${this._escHtml(conf.name || 'Unnamed Plugin')}
-                        <span class="pm-badge" id="pm-badge-type-${p.getGuid()}"></span>
+                    <h3 id="pm-title-${p.getGuid()}">${this._escHtml(conf.name || 'Unnamed Plugin')}</h3>
+                    <div class="pm-card-meta">
                         <span class="pm-badge pm-version-badge" id="vbadge-${p.getGuid()}">v${this._escHtml(conf.version || conf.ver || '0.0.0')}</span>
-                    </h3>
+                        <span class="pm-badge" id="pm-badge-type-${p.getGuid()}"></span>
+                    </div>
                     <p>${this._escHtml(conf.description || 'No description')}</p>
                     ${sourceRepo ? `<p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(sourceRepo)}">${this._escHtml(sourceRepo)}</span></p>` : ''}
                 </div>
@@ -1578,7 +1579,7 @@ class Plugin extends AppPlugin {
                 ghGlyph.className = 'pm-gh-glyph';
                 ghGlyph.setAttribute('aria-hidden', 'true');
                 typeBadge.appendChild(ghGlyph);
-                typeBadge.appendChild(document.createTextNode(' GitHub'));
+                typeBadge.appendChild(document.createTextNode('GitHub'));
             }
 
             const actionsContainer = card.querySelector('.pm-card-actions');
