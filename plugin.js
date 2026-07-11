@@ -1,3 +1,6 @@
+// Fallback only — the live value is read from the plugin's own config at load.
+const PM_VERSION = '1.16.1';
+
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
 const PM_CARD_COLORS = [
@@ -20,6 +23,10 @@ class Plugin extends AppPlugin {
         // We load PAT from plugin configuration, removing from cleartext localstorage if found
         const conf = this.getConfiguration();
         this.githubPat = conf?.custom?.githubPat || '';
+        // Our own version + repo, for the header badge.
+        this._selfVersion = conf?.version || conf?.custom?.pluginVersion || PM_VERSION;
+        this._selfRepo = conf?.__source_repo || 'https://github.com/ahpatel/thymer-plugins-manager';
+        this._selfIcon = conf?.icon || 'box';
         if (localStorage.getItem('pm_github_pat')) localStorage.removeItem('pm_github_pat');
         if (localStorage.getItem('pm_github_pat_persistent')) localStorage.removeItem('pm_github_pat_persistent');
         this.communityRepos = conf?.custom?.community_repos || localStorage.getItem('pm_community_repos') || 'https://raw.githubusercontent.com/ed-nico/awesome-thymer/main/README.md';
@@ -27,6 +34,18 @@ class Plugin extends AppPlugin {
         this._activeModals = []; // track all open modals for cleanup on unload
         try { this._disabledPlugins = JSON.parse(localStorage.getItem('pm_disabled_plugins') || '{}'); } catch (e) { this._disabledPlugins = {}; }
         try { this._pluginColors = JSON.parse(localStorage.getItem('pm_plugin_colors') || '{}'); } catch (e) { this._pluginColors = {}; }
+        // Cached Discover metadata (version + icon) read from each repo's plugin.json via
+        // raw.githubusercontent.com — not the rate-limited GitHub API.
+        try { this._discoverMeta = JSON.parse(localStorage.getItem('pm_discover_meta') || '{}'); } catch (e) { this._discoverMeta = {}; }
+        // Per-tab list search/sort/filter state (search text is never persisted).
+        this._listCache = { app: [], collection: [] };
+        this._listState = { app: this._defaultListState(), collection: this._defaultListState() };
+        try {
+            const saved = JSON.parse(localStorage.getItem('pm_list_state') || '{}');
+            for (const tab of ['app', 'collection']) {
+                if (saved[tab]) Object.assign(this._listState[tab], saved[tab], { q: '' });
+            }
+        } catch (e) { }
         try { this._incompatiblePlugins = JSON.parse(localStorage.getItem('pm_incompatible') || '{}'); } catch (e) { this._incompatiblePlugins = {}; }
         // Evict stale incompatible entries older than 30 days
         const _cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
@@ -133,6 +152,16 @@ class Plugin extends AppPlugin {
         }
         this._discoverItems = null;
         this._closeColorPopover();
+        if (this._pointerHandler) {
+            document.removeEventListener('mousedown', this._pointerHandler, true);
+            this._pointerHandler = null;
+        }
+        for (const t of Object.values(this._searchTimers || {})) clearTimeout(t);
+        this._searchTimers = {};
+        for (const layer of (this._confettiLayers || [])) {
+            if (layer && layer.parentNode) layer.parentNode.removeChild(layer);
+        }
+        this._confettiLayers = [];
         // Remove any dangling modals from the DOM to prevent memory leaks
         for (const modal of (this._activeModals || [])) {
             if (modal && modal.parentNode) modal.parentNode.removeChild(modal);
@@ -284,15 +313,15 @@ class Plugin extends AppPlugin {
         const html = `
             <div class="pm-container">
                 <div class="pm-header">
-                    <h1>Plugins Manager</h1>
-                    <div class="pm-header-actions">
-                        <div class="pm-safe-mode" id="pm-safe-mode-slot" title="Safe Mode: turn every GitHub-linked plugin off at once (settings preserved), then back on">
-                            <span class="pm-safe-mode-label">Safe Mode</span>
-                        </div>
-                        <button class="pm-btn pm-btn-check-updates" id="pm-check-updates-btn" title="Check All Updates">
-                            <span class="pm-btn-icon" aria-hidden="true">↻</span>
-                            <span class="pm-btn-label">Check All Updates</span>
-                        </button>
+                    <span class="pm-header-logo">
+                        <span class="pm-header-icon" id="pm-header-icon" aria-hidden="true"></span>
+                    </span>
+                    <div class="pm-header-titlerow">
+                        <h1>Plugins Manager</h1>
+                        <span class="pm-header-meta" data-external-url="${this._escHtml(this._selfRepo)}" title="View this plugin on GitHub" role="link" tabindex="0">
+                            <span class="pm-header-version">v${this._escHtml(this._selfVersion)}</span>
+                            <span class="pm-gh-glyph pm-gh-mark" aria-hidden="true"></span>
+                        </span>
                     </div>
                 </div>
                 
@@ -314,8 +343,27 @@ class Plugin extends AppPlugin {
                         <div class="pm-tab-actions pm-tab-actions-secondary">
                             <button class="pm-btn pm-btn-update" id="pm-check-updates-global-btn" title="Check for plugin updates"><span class="pm-btn-icon" aria-hidden="true">↻</span></button>
                             <button class="pm-btn pm-btn-update update-btn pm-hidden" id="pm-update-all-global-btn">Update All</button>
-                            <button class="pm-btn" id="pm-disable-all-global-btn" title="Turn off all GitHub-linked plugins">All Off</button>
-                            <button class="pm-btn" id="pm-enable-all-global-btn" title="Turn all disabled plugins back on">All On</button>
+                            <button class="pm-btn pm-btn-alloff" id="pm-disable-all-global-btn" title="Turn off all plugins">All Off</button>
+                            <button class="pm-btn pm-btn-allon" id="pm-enable-all-global-btn" title="Turn all disabled plugins back on">All On</button>
+                        </div>
+                    </div>
+                    <div class="pm-list-controls">
+                        <input type="text" id="pm-search-global" class="pm-input pm-search-input" placeholder="Search plugins…" autocomplete="off" />
+                        <select id="pm-sort-global" class="pm-input pm-select" aria-label="Sort plugins">
+                            <option value="name">Name (A–Z)</option>
+                            <option value="author">Author (A–Z)</option>
+                            <option value="color">Color</option>
+                            <option value="status">Active first</option>
+                        </select>
+                        <div class="pm-chips" id="pm-status-global" role="group" aria-label="Filter by status">
+                            <button type="button" class="pm-chip active" data-status="all">All</button>
+                            <button type="button" class="pm-chip" data-status="active">Active</button>
+                            <button type="button" class="pm-chip" data-status="inactive">Inactive</button>
+                        </div>
+                        <div class="pm-color-filter pm-hidden" id="pm-colorfilter-global"></div>
+                        <div class="pm-seg-group" id="pm-view-global" role="group" aria-label="View mode">
+                            <button type="button" class="pm-seg active" data-view="grid" title="Grid view" aria-label="Grid view"></button>
+                            <button type="button" class="pm-seg" data-view="list" title="List view" aria-label="List view"></button>
                         </div>
                     </div>
                     <div id="pm-global-list" class="pm-list-container">Loading...</div>
@@ -331,8 +379,27 @@ class Plugin extends AppPlugin {
                         <div class="pm-tab-actions pm-tab-actions-secondary">
                             <button class="pm-btn pm-btn-update" id="pm-check-updates-col-btn" title="Check for collection updates"><span class="pm-btn-icon" aria-hidden="true">↻</span></button>
                             <button class="pm-btn pm-btn-update update-btn pm-hidden" id="pm-update-all-col-btn">Update All</button>
-                            <button class="pm-btn" id="pm-disable-all-col-btn" title="Turn off all GitHub-linked collection plugins">All Off</button>
-                            <button class="pm-btn" id="pm-enable-all-col-btn" title="Turn all disabled collection plugins back on">All On</button>
+                            <button class="pm-btn pm-btn-alloff" id="pm-disable-all-col-btn" title="Turn off all collection plugins">All Off</button>
+                            <button class="pm-btn pm-btn-allon" id="pm-enable-all-col-btn" title="Turn all disabled collection plugins back on">All On</button>
+                        </div>
+                    </div>
+                    <div class="pm-list-controls">
+                        <input type="text" id="pm-search-col" class="pm-input pm-search-input" placeholder="Search collection plugins…" autocomplete="off" />
+                        <select id="pm-sort-col" class="pm-input pm-select" aria-label="Sort collection plugins">
+                            <option value="name">Name (A–Z)</option>
+                            <option value="author">Author (A–Z)</option>
+                            <option value="color">Color</option>
+                            <option value="status">Active first</option>
+                        </select>
+                        <div class="pm-chips" id="pm-status-col" role="group" aria-label="Filter by status">
+                            <button type="button" class="pm-chip active" data-status="all">All</button>
+                            <button type="button" class="pm-chip" data-status="active">Active</button>
+                            <button type="button" class="pm-chip" data-status="inactive">Inactive</button>
+                        </div>
+                        <div class="pm-color-filter pm-hidden" id="pm-colorfilter-col"></div>
+                        <div class="pm-seg-group" id="pm-view-col" role="group" aria-label="View mode">
+                            <button type="button" class="pm-seg active" data-view="grid" title="Grid view" aria-label="Grid view"></button>
+                            <button type="button" class="pm-seg" data-view="list" title="List view" aria-label="List view"></button>
                         </div>
                     </div>
                     <div id="pm-collections-list" class="pm-list-container">Loading...</div>
@@ -344,6 +411,11 @@ class Plugin extends AppPlugin {
                     <div class="pm-tab-toolbar">
                         <div class="pm-tab-actions pm-tab-actions-primary">
                             <input type="text" id="pm-discover-search" class="pm-input pm-search-input" placeholder="Search plugins, collections, themes..." autocomplete="off" />
+                            <select id="pm-discover-sort" class="pm-input pm-select" aria-label="Sort discover results">
+                                <option value="name">Name (A–Z)</option>
+                                <option value="author">Author (A–Z)</option>
+                                <option value="type">Type</option>
+                            </select>
                             <div class="pm-filter-chips">
                                 <button class="pm-filter-chip active" data-filter="all">All</button>
                                 <button class="pm-filter-chip" data-filter="app">Plugins</button>
@@ -352,7 +424,7 @@ class Plugin extends AppPlugin {
                             </div>
                         </div>
                         <div class="pm-tab-actions pm-tab-actions-secondary">
-                            <button class="pm-btn" id="pm-refresh-discover-btn">Refresh</button>
+                            <button class="pm-btn pm-btn-refresh" id="pm-refresh-discover-btn"><span class="pm-btn-icon" aria-hidden="true">↻</span> Refresh</button>
                         </div>
                     </div>
                     <div id="pm-discover-list" class="pm-list-container">Loading...</div>
@@ -566,9 +638,16 @@ class Plugin extends AppPlugin {
     }
 
     bindEvents(container, panel) {
-        container.querySelector('#pm-check-updates-btn').addEventListener('click', () => {
-            this.checkForAllUpdatesInBackground({ manual: true });
-        });
+        // Remember where the user last clicked so confirmations can pop up right there
+        // instead of in the middle of the screen.
+        this._pointerHandler = (e) => { this._lastPointer = { x: e.clientX, y: e.clientY }; };
+        document.addEventListener('mousedown', this._pointerHandler, true);
+
+        // This plugin's own icon, beside the title.
+        const headerIcon = container.querySelector('#pm-header-icon');
+        if (headerIcon) {
+            try { headerIcon.appendChild(this.ui.createIcon(this._selfIcon || 'box')); } catch (e) { }
+        }
 
         // Tabs
         container.querySelector('.pm-tabs').addEventListener('click', (e) => {
@@ -595,13 +674,45 @@ class Plugin extends AppPlugin {
 
         // Responsive: toggle 'narrow' (icon tabs) and 'wide' (multi-col cards) based on container width
         const pmContainer = container.querySelector('.pm-container');
+
+        // Pin the panel's width so it can't change with content length. Filtering the list
+        // (e.g. to "Inactive") makes it short enough to lose its scrollbar, which hands ~15px
+        // of width back and visibly resizes the whole interface. .pm-container isn't the
+        // scroll host, so find the real one and permanently reserve its scrollbar gutter.
+        try {
+            const candidates = [];
+            let node = pmContainer && pmContainer.parentElement;
+            while (node) {
+                candidates.push(node);           // walk the FULL chain, incl. <body> and <html>
+                node = node.parentElement;
+            }
+            for (const n of candidates) {
+                const oy = getComputedStyle(n).overflowY;
+                const scrollable = (oy === 'auto' || oy === 'scroll') || n.scrollHeight > n.clientHeight;
+                if (!scrollable) continue;
+                n.style.scrollbarGutter = 'stable';
+                // Force the gutter even where scrollbar-gutter is unsupported/ignored.
+                if (oy !== 'scroll') n.style.overflowY = 'scroll';
+            }
+        } catch (e) { }
+
         if (pmContainer && window.ResizeObserver) {
             this._resizeObserver = new ResizeObserver(entries => {
                 for (const entry of entries) {
                     const w = entry.contentRect.width;
-                    pmContainer.classList.toggle('narrow', w < 520);
-                    pmContainer.classList.toggle('compact', w < 760);
-                    pmContainer.classList.toggle('wide', w > 700);
+                    // Hysteresis. Filtering the list (or switching tabs) changes its height,
+                    // which makes the panel's scrollbar appear/disappear and shifts our width
+                    // by ~15px. Without a deadband that flips these breakpoints and the card
+                    // grid jumps between 1 column and multi-column. Each threshold therefore
+                    // needs to be overshot by 15px before it flips back.
+                    const dead = 15;
+                    const hold = (cls, on, off) => {
+                        const active = pmContainer.classList.contains(cls);
+                        pmContainer.classList.toggle(cls, active ? on : off);
+                    };
+                    hold('narrow', w < 520 + dead, w < 520 - dead);
+                    hold('compact', w < 760 + dead, w < 760 - dead);
+                    hold('wide', w > 700 - dead, w > 700 + dead);
                 }
             });
             this._resizeObserver.observe(pmContainer);
@@ -631,6 +742,22 @@ class Plugin extends AppPlugin {
         // Discover search
         container.querySelector('#pm-discover-search').addEventListener('input', () => {
             this._filterDiscoverList(container);
+        });
+
+        container.querySelector('#pm-discover-sort').addEventListener('change', () => {
+            this._filterDiscoverList(container);
+        });
+
+        // Give the Discover filter chips the same glyphs used as the cards' corner type marks.
+        const chipGlyphs = { app: 'puzzle', collection: 'folder', theme: 'brush' };
+        container.querySelectorAll('#tab-discover .pm-filter-chip').forEach(chip => {
+            const glyph = chipGlyphs[chip.dataset.filter];
+            if (!glyph) return;
+            const span = document.createElement('span');
+            span.className = 'pm-chip-icon';
+            span.setAttribute('aria-hidden', 'true');
+            try { span.appendChild(this.ui.createIcon(glyph)); } catch (e) { return; }
+            chip.insertBefore(span, chip.firstChild);
         });
 
         // Discover filter chips
@@ -665,7 +792,8 @@ class Plugin extends AppPlugin {
         container.querySelector('#pm-update-all-col-btn').addEventListener('click', () => this._updateAllAvailable(container, 'collection'));
         container.querySelector('#pm-disable-all-col-btn').addEventListener('click', (e) => this._disableAllPlugins(container, 'collection', { el: e.currentTarget, isSwitch: false }));
         container.querySelector('#pm-enable-all-col-btn').addEventListener('click', (e) => this._enableAllPlugins(container, 'collection', { el: e.currentTarget, isSwitch: false }));
-        this._setupSafeModeToggle(container);
+        this._bindListControls(container, 'app');
+        this._bindListControls(container, 'collection');
         container.querySelector('#pm-export-workspace-btn').addEventListener('click', () => this.showExportDialog('all'));
         container.querySelector('#pm-import-workspace-btn').addEventListener('click', () => this.showImportDialog(container, 'all'));
         container.querySelector('#pm-export-workspace-themes-btn').addEventListener('click', () => this._exportAllThemes());
@@ -905,32 +1033,223 @@ class Plugin extends AppPlugin {
             filtered = filtered.filter(item => item.type === filterType);
         }
 
-        // Apply search filter
+        // Apply search filter (author is matched too, since cards now show it)
         if (searchTerm) {
             filtered = filtered.filter(item => {
                 return item.name.toLowerCase().includes(searchTerm) ||
                     item.description.toLowerCase().includes(searchTerm) ||
-                    item.category.toLowerCase().includes(searchTerm);
+                    item.category.toLowerCase().includes(searchTerm) ||
+                    this._discoverAuthor(item).toLowerCase().includes(searchTerm);
             });
         }
 
+        filtered = this._sortDiscoverItems(filtered, container);
+
         await this._renderDiscoverCards(container, filtered);
+    }
+
+    // Snap the install button's progress fill to 100%, then pop a small confetti burst.
+    _finishInstallAnimation(btn) {
+        if (!btn) return;
+        btn.classList.add('pm-installing', 'pm-install-done');
+        setTimeout(() => {
+            this._confettiBurst(btn, 22);
+            btn.classList.remove('pm-installing', 'pm-install-done');
+        }, 200);
+    }
+
+    // Small dependency-free confetti pop from an element. Particles are plain spans animated
+    // with rAF (gravity + spin) in a fixed overlay, torn down when they die.
+    _confettiBurst(anchorEl, count = 22) {
+        if (!anchorEl || !anchorEl.isConnected) return;
+
+        const rect = anchorEl.getBoundingClientRect();
+        const originX = rect.left + rect.width / 2;
+        const originY = rect.top + rect.height / 2;
+
+        const layer = document.createElement('div');
+        layer.className = 'pm-confetti-layer';
+        document.body.appendChild(layer);
+        this._confettiLayers = this._confettiLayers || [];
+        this._confettiLayers.push(layer);
+
+        const colors = PM_CARD_COLORS.map(c => c.hex);
+        const parts = [];
+        for (let i = 0; i < count; i++) {
+            const el = document.createElement('span');
+            el.className = 'pm-confetti';
+            el.style.background = colors[i % colors.length];
+            el.style.left = `${originX}px`;
+            el.style.top = `${originY}px`;
+            layer.appendChild(el);
+
+            // Fan upward and out.
+            const angle = (-Math.PI / 2) + (Math.random() - 0.5) * (Math.PI * 0.95);
+            const speed = 3 + Math.random() * 4.5;
+            parts.push({
+                el,
+                x: 0, y: 0,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                rot: Math.random() * 360,
+                vr: (Math.random() - 0.5) * 26,
+                life: 0
+            });
+        }
+
+        const GRAVITY = 0.22;
+        const LIFESPAN = 70; // frames
+        const step = () => {
+            let alive = false;
+            for (const p of parts) {
+                if (p.life > LIFESPAN) continue;
+                alive = true;
+                p.life++;
+                p.vy += GRAVITY;
+                p.x += p.vx;
+                p.y += p.vy;
+                p.rot += p.vr;
+                p.el.style.transform = `translate(${p.x}px, ${p.y}px) rotate(${p.rot}deg)`;
+                p.el.style.opacity = String(Math.max(0, 1 - p.life / LIFESPAN));
+            }
+            if (alive) {
+                requestAnimationFrame(step);
+            } else {
+                layer.remove();
+                this._confettiLayers = (this._confettiLayers || []).filter(l => l !== layer);
+            }
+        };
+        requestAnimationFrame(step);
+    }
+
+    _saveDiscoverMeta() {
+        try { localStorage.setItem('pm_discover_meta', JSON.stringify(this._discoverMeta || {})); } catch (e) { }
+    }
+
+    // Read a community entry's plugin.json straight from raw.githubusercontent.com for its
+    // version AND its declared icon. This avoids the GitHub *API* rate limit (60/hr
+    // unauthenticated) — raw file reads aren't metered the same way. Cached for a day.
+    async _fetchDiscoverMeta(item) {
+        const key = item.url || '';
+        if (!key || item.type === 'theme') return { version: '', icon: '' };
+
+        const cached = this._discoverMeta[key];
+        if (cached && (Date.now() - (cached.t || 0)) < 86400000) {
+            return { version: cached.v || '', icon: cached.i || '' };
+        }
+
+        const m = key.match(/github\.com\/([^\/]+)\/([^\/#?]+)/i);
+        if (!m) return { version: '', icon: '' };
+        const owner = m[1];
+        const repo = m[2].replace(/\.git$/, '');
+
+        let version = '';
+        let icon = '';
+        for (const branch of ['main', 'master']) {
+            try {
+                const res = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/plugin.json`);
+                if (!res.ok) continue;
+                const json = await res.json();
+                version = json.version || json.ver || '';
+                icon = json.icon || '';
+                break;
+            } catch (e) { /* try next branch */ }
+        }
+
+        this._discoverMeta[key] = { v: version, i: icon, t: Date.now() };
+        this._saveDiscoverMeta();
+        return { version, icon };
+    }
+
+    // After the cards paint, fill in each entry's real version + icon (a few at a time so we
+    // don't fire ~35 requests at once). The plugin's own icon replaces the generic type glyph.
+    async _hydrateDiscoverMeta(targets) {
+        const CONCURRENCY = 5;
+        for (let i = 0; i < targets.length; i += CONCURRENCY) {
+            const batch = targets.slice(i, i + CONCURRENCY);
+            await Promise.all(batch.map(async t => {
+                let meta = { version: '', icon: '' };
+                try {
+                    meta = await this._fetchDiscoverMeta(t.item);
+                } catch (e) { /* leave fallbacks in place */ }
+
+                if (t.verEl && t.verEl.isConnected) {
+                    if (meta.version) {
+                        t.verEl.textContent = `v${meta.version}`;
+                        t.verEl.classList.remove('pm-hidden');
+                    } else {
+                        t.verEl.remove();
+                    }
+                }
+
+                // Feature the plugin's real icon when its repo declares one.
+                if (meta.icon && t.iconEl && t.iconEl.isConnected) {
+                    try {
+                        const glyph = this.ui.createIcon(meta.icon);
+                        t.iconEl.innerHTML = '';
+                        t.iconEl.appendChild(glyph);
+                    } catch (e) { /* keep the type fallback already rendered */ }
+                }
+            }));
+        }
+    }
+
+    // Author for a discover entry = the GitHub repo owner (that's all the community README gives us).
+    _discoverAuthor(item) {
+        const attr = this._pluginAttribution({ __source_repo: item.url || '' });
+        return attr ? attr.label : '';
+    }
+
+    _sortDiscoverItems(items, container) {
+        const sortEl = container.querySelector('#pm-discover-sort');
+        const sort = (sortEl && sortEl.value) || 'name';
+        const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        const sorted = items.slice();
+        sorted.sort((a, b) => {
+            if (sort === 'author') {
+                const aa = this._discoverAuthor(a);
+                const ba = this._discoverAuthor(b);
+                if (!aa && ba) return 1;
+                if (aa && !ba) return -1;
+                const c = aa.localeCompare(ba, undefined, { sensitivity: 'base' });
+                if (c !== 0) return c;
+            } else if (sort === 'type') {
+                const c = (a.type || '').localeCompare(b.type || '');
+                if (c !== 0) return c;
+            }
+            return byName(a, b);
+        });
+        return sorted;
     }
 
     async _renderDiscoverCards(container, items) {
         const listContainer = container.querySelector('#pm-discover-list');
         listContainer.innerHTML = '';
 
-        // Build a set of installed plugin source URLs and names for quick lookup
+        // Build a set of installed plugin source URLs and names for quick lookup, plus the
+        // installed version keyed the same way (the community README carries no version, and
+        // fetching one per entry would blow GitHub's rate limit — so we show what we know).
         const installedSet = new Set();
+        const installedVersions = new Map();
+        const installedPlugins = new Map();
         try {
             const allGlobals = await this.data.getAllGlobalPlugins();
             const allCollections = await this.data.getAllCollections();
             [...allGlobals, ...allCollections].forEach(p => {
                 try {
                     const conf = p.getExistingCodeAndConfig().json;
-                    if (conf.__source_repo) installedSet.add(conf.__source_repo);
-                    if (conf.name) installedSet.add(conf.name.toLowerCase());
+                    const ver = conf.version || conf.ver || '';
+                    if (conf.__source_repo) {
+                        installedSet.add(conf.__source_repo);
+                        if (ver) installedVersions.set(conf.__source_repo, ver);
+                    }
+                    if (conf.name) {
+                        installedSet.add(conf.name.toLowerCase());
+                        if (ver) installedVersions.set(conf.name.toLowerCase(), ver);
+                    }
+                    // Keep the plugin object so Discover can uninstall it directly.
+                    if (conf.__source_repo) installedPlugins.set(conf.__source_repo, p);
+                    if (conf.name) installedPlugins.set(conf.name.toLowerCase(), p);
                 } catch (e) { /* skip */ }
             });
         } catch (e) { /* couldn't read installed plugins, proceed without */ }
@@ -940,25 +1259,64 @@ class Plugin extends AppPlugin {
             return;
         }
 
+        const metaTargets = [];
+
         items.forEach(item => {
             const isCollection = item.type === 'collection';
             const isTheme = item.type === 'theme';
             const badgeText = isTheme ? 'Theme' : (isCollection ? 'Collection' : 'Plugin');
-            const badgeClass = isTheme ? 'pm-badge-theme' : (isCollection ? 'pm-badge-collection' : 'pm-badge-plugin');
+            const typeIcon = isTheme ? 'brush' : (isCollection ? 'folder' : 'puzzle');
+
+            const isGithubSrc = this._isValidGithubUrl(item.url);
+            const attr = this._pluginAttribution({ __source_repo: item.url || '' });
+            const knownVersion = installedVersions.get(item.url) || installedVersions.get(item.name.toLowerCase()) || '';
 
             const card = document.createElement('div');
             card.className = 'pm-card';
+            // Type is a light icon in the top-right corner; the hero icon is the plugin's own.
+            card.dataset.ctype = item.type;
             card.innerHTML = `
+                <span class="pm-card-typemark" data-type-mark title="${this._escHtml(badgeText)}" aria-label="${this._escHtml(badgeText)}"></span>
+                <div class="pm-card-iconrow"><span class="pm-card-icon" data-discover-icon aria-hidden="true"></span></div>
                 <div class="pm-card-info">
-                    <h3>
-                        ${this._escHtml(item.name)} 
-                        <span class="pm-badge ${badgeClass}">${badgeText}</span>
+                    <h3 class="pm-card-title">
+                        <span class="pm-card-name">${this._escHtml(item.name)}</span>
+                        <span class="pm-badge pm-version-badge${knownVersion ? '' : ' pm-hidden'}" data-discover-ver>${knownVersion ? 'v' + this._escHtml(knownVersion) : ''}</span>
+                        ${isGithubSrc ? `<span class="pm-gh-glyph pm-gh-mark" aria-label="GitHub source" title="GitHub source"></span>` : ''}
                     </h3>
+                    <div class="pm-card-attr" data-discover-attr></div>
                     <p>${this._escHtml(item.description)}</p>
                     <p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(item.url)}">${this._escHtml(item.url)}</span></p>
                 </div>
                 <div class="pm-card-actions"></div>
             `;
+
+            // Light type mark, top-right.
+            const markSlot = card.querySelector('[data-type-mark]');
+            if (markSlot) {
+                try { markSlot.appendChild(this.ui.createIcon(typeIcon)); } catch (e) { }
+            }
+
+            // Hero icon: the type glyph is only a placeholder until the real icon arrives.
+            const dIconSlot = card.querySelector('[data-discover-icon]');
+            if (dIconSlot) {
+                try { dIconSlot.appendChild(this.ui.createIcon(typeIcon)); } catch (e) { }
+            }
+
+            const verEl = card.querySelector('[data-discover-ver]');
+            metaTargets.push({ item, verEl: knownVersion ? null : verEl, iconEl: dIconSlot });
+
+            const dAttrSlot = card.querySelector('[data-discover-attr]');
+            if (dAttrSlot && attr) {
+                dAttrSlot.appendChild(document.createTextNode('by '));
+                const link = document.createElement('span');
+                link.className = 'pm-card-attr-link';
+                link.textContent = attr.label;
+                if (attr.url) link.setAttribute('data-external-url', attr.url);
+                dAttrSlot.appendChild(link);
+            } else if (dAttrSlot) {
+                dAttrSlot.remove();
+            }
 
             const actionsContainer = card.querySelector('.pm-card-actions');
 
@@ -990,11 +1348,39 @@ class Plugin extends AppPlugin {
                 installBtn.className = isSavedTheme ? 'pm-btn' : 'pm-btn primary';
                 installBtn.innerText = isSavedTheme ? 'Re-Save Theme' : 'Save Theme';
             } else if (isInstalled) {
-                installBtn.className = 'pm-btn';
-                installBtn.innerText = 'Reinstall';
+                installBtn.className = 'pm-btn pm-btn-uninstall';
+                installBtn.innerText = 'Uninstall';
             } else {
                 installBtn.className = 'pm-btn primary';
                 installBtn.innerText = 'Install';
+            }
+
+            // Installed → the button uninstalls (red tint) instead of installing.
+            if (isInstalled && !isIncompatible && !isTheme) {
+                installBtn.addEventListener('click', async () => {
+                    const target = installedPlugins.get(item.url) || installedPlugins.get(item.name.toLowerCase());
+                    if (!target) {
+                        this.ui.addToaster({ title: 'Not found', message: `Couldn't locate an installed copy of ${item.name}.`, autoDestroyTime: 4000, dismissible: true });
+                        return;
+                    }
+                    if (!await this._showConfirmModal('Uninstall plugin', `Uninstall ${item.name}?\nThis removes it from your workspace. You can install it again from Discover at any time.`, { confirmText: 'Uninstall', danger: true })) return;
+                    try {
+                        installBtn.innerText = 'Uninstalling...';
+                        installBtn.disabled = true;
+                        await target.trashPlugin();
+                        this._autoExport();
+                        this.ui.addToaster({ title: 'Uninstalled', message: `${item.name} has been removed.`, autoDestroyTime: 3000, dismissible: true });
+                        this.loadPlugins(container);
+                        this._filterDiscoverList(container);
+                    } catch (e) {
+                        installBtn.innerText = 'Uninstall';
+                        installBtn.disabled = false;
+                        this.ui.addToaster({ title: 'Uninstall Failed', message: e.message, autoDestroyTime: 5000, dismissible: true });
+                    }
+                });
+                actionsContainer.appendChild(installBtn);
+                listContainer.appendChild(card);
+                return; // metaTargets was already registered when the card was built
             }
 
             // If incompatible, add a Recheck button first
@@ -1033,6 +1419,7 @@ class Plugin extends AppPlugin {
                     const originalText = installBtn.innerText;
                     installBtn.innerText = isTheme ? 'Fetching...' : 'Installing...';
                     installBtn.disabled = true;
+                    installBtn.classList.add('pm-installing'); // left→right progress fill
 
                     try {
                         if (isTheme) {
@@ -1057,14 +1444,19 @@ class Plugin extends AppPlugin {
 
                             installBtn.className = 'pm-btn';
                             installBtn.innerText = 'Saved';
+                            this._finishInstallAnimation(installBtn);
                         } else {
                             const { json, js, css } = await this.fetchGithubRepo(item.url);
                             await this.installPlugin(json, js, { interactive: false, cssCode: css });
                             this.ui.addToaster({ title: `Successfully installed ${json.name}`, autoDestroyTime: 3000, dismissible: true });
                             installBtn.innerText = 'Installed';
+                            this._finishInstallAnimation(installBtn);
                             this.loadPlugins(container);
+                            // Re-render Discover so the entry flips to its red Uninstall button.
+                            setTimeout(() => this._filterDiscoverList(container), 1400);
                         }
                     } catch (err) {
+                        installBtn.classList.remove('pm-installing', 'pm-install-done');
                         // Add to incompatible list
                         this._incompatiblePlugins[item.url] = { name: item.name, error: err.message, date: new Date().toISOString() };
                         localStorage.setItem('pm_incompatible', JSON.stringify(this._incompatiblePlugins));
@@ -1077,6 +1469,9 @@ class Plugin extends AppPlugin {
 
             listContainer.appendChild(card);
         });
+
+        // Fill in versions in the background so the list paints immediately.
+        this._hydrateDiscoverMeta(metaTargets);
     }
 
     async loadPlugins(container) {
@@ -1084,8 +1479,17 @@ class Plugin extends AppPlugin {
             const globals = await this.data.getAllGlobalPlugins();
             const collections = await this.data.getAllCollections();
 
-            this.renderPluginList(container, 'pm-global-list', globals, 'app');
-            this.renderPluginList(container, 'pm-collections-list', collections, 'collection');
+            // Build the normalized descriptor cache once; search/sort/filter re-render from it
+            // without re-hitting the SDK.
+            this._buildListCache('app', globals, container);
+            this._buildListCache('collection', collections, container);
+
+            // Update All reflects the full (unfiltered) set, so filtering can't hide it.
+            this._refreshUpdateAllVisibility(container, 'app');
+            this._refreshUpdateAllVisibility(container, 'collection');
+
+            this._renderFilteredList(container, 'app');
+            this._renderFilteredList(container, 'collection');
         } catch (err) {
             console.error(err);
             container.querySelector('#pm-global-list').innerHTML = "Error loading plugins.";
@@ -1157,13 +1561,13 @@ class Plugin extends AppPlugin {
 
     // Small swatch popover anchored to a card's color button. Rendered to <body> (cards
     // are overflow:hidden); the pm-container class lets the --pm-* tokens resolve there.
-    _openColorPopover(anchorEl, currentHex, onPick) {
+    _openColorPopover(anchorEl, currentHex, onPick, colors) {
         this._closeColorPopover();
 
         const pop = document.createElement('div');
         pop.className = 'pm-container pm-color-popover';
 
-        PM_CARD_COLORS.forEach(c => {
+        (colors || PM_CARD_COLORS).forEach(c => {
             const sw = document.createElement('button');
             sw.type = 'button';
             sw.className = 'pm-color-swatch';
@@ -1262,6 +1666,9 @@ class Plugin extends AppPlugin {
             sourceFiles: conf.__source_files || null,
             version: conf.version || conf.ver || '',
             icon: conf.icon || null,
+            // Kept so disabled cards stay searchable/sortable by description + author.
+            description: conf.description || '',
+            author: (conf.author || conf.by || '') || null,
             custom: conf.custom !== undefined ? this._cloneJsonValue(conf.custom) : undefined,
             dateDisabled: new Date().toISOString()
         };
@@ -1311,7 +1718,7 @@ class Plugin extends AppPlugin {
         const note = isLocal
             ? 'This removes it from the Plugins panel. Its code is saved here so you can re-enable it anytime.'
             : 'This removes it from the official Plugins panel. You can re-enable it later from Plugins Manager.';
-        if (!confirm(`Disable ${pluginName}?\n\n${note}`)) {
+        if (!await this._showConfirmModal('Disable plugin', `Disable ${pluginName}?\n${note}`, { confirmText: 'Disable', danger: true })) {
             return;
         }
 
@@ -1392,7 +1799,7 @@ class Plugin extends AppPlugin {
             return { count: 0 };
         }
 
-        if (!confirm(`Turn OFF ${targets.length} plugin${targets.length === 1 ? '' : 's'}?\n\nEach is removed from the Plugins panel (its settings are preserved) and can be turned back on anytime.`)) {
+        if (!await this._showConfirmModal('Turn all off', `Turn OFF ${targets.length} plugin${targets.length === 1 ? '' : 's'}?\nEach is removed from the Plugins panel (its settings are preserved) and can be turned back on anytime.`, { confirmText: 'Turn all off', danger: true })) {
             return { cancelled: true };
         }
 
@@ -1432,7 +1839,7 @@ class Plugin extends AppPlugin {
             return { count: 0 };
         }
 
-        if (!confirm(`Turn ON ${disabled.length} plugin${disabled.length === 1 ? '' : 's'}?\n\nEach is reinstalled from its GitHub source (network required).`)) {
+        if (!await this._showConfirmModal('Turn all on', `Turn ON ${disabled.length} plugin${disabled.length === 1 ? '' : 's'}?\nEach is reinstalled from its source (network required).`, { confirmText: 'Turn all on' })) {
             return { cancelled: true };
         }
 
@@ -1459,119 +1866,98 @@ class Plugin extends AppPlugin {
         return { count: successCount };
     }
 
-    // Header "Safe Mode" master switch: ON turns everything off, OFF turns everything on.
-    // Reflects state on open ("any plugins currently disabled" => Safe Mode is on).
-    _setupSafeModeToggle(container) {
-        const slot = container.querySelector('#pm-safe-mode-slot');
-        if (!slot) return;
-        const existing = slot.querySelector('.pm-switch');
-        if (existing) existing.remove();
+    // Build one disabled "ghost" card. Returns the element; the caller appends it.
+    _renderGhostCard(disabled, panelContainer, typeFilter) {
+        const disabledDate = disabled.dateDisabled ? new Date(disabled.dateDisabled).toLocaleDateString() : 'Unknown date';
+        const card = document.createElement('div');
+        card.className = 'pm-card pm-card-disabled';
+        card.innerHTML = `
+            <div class="pm-card-iconrow"><span class="pm-card-icon" data-disabled-icon aria-hidden="true"></span></div>
+            <div class="pm-card-info">
+                <h3 class="pm-card-title">
+                    <span class="pm-card-name">${this._escHtml(disabled.name || 'Unnamed Plugin')}</span>
+                    ${disabled.version ? `<span class="pm-badge pm-version-badge">v${this._escHtml(disabled.version)}</span>` : ''}
+                    <span class="pm-badge">Disabled</span>
+                </h3>
+                <p>Disabled on ${this._escHtml(disabledDate)}. Re-enable to reinstall in the official Plugins panel.</p>
+                ${disabled.sourceRepo ? `<p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(disabled.sourceRepo)}">${this._escHtml(disabled.sourceRepo)}</span></p>` : ''}
+            </div>
+            <div class="pm-card-actions"></div>
+        `;
 
-        const anyDisabled = Object.keys(this._disabledPlugins || {}).length > 0;
-        const sw = this._createToggleSwitch({
-            on: anyDisabled,
-            ariaLabel: 'Safe Mode. Turn on to disable all plugins; turn off to re-enable them.',
-            onToggle: async (el) => {
-                const turningOn = el.getAttribute('aria-checked') !== 'true'; // intent = opposite of current
-                const result = turningOn
-                    ? await this._disableAllPlugins(container, 'all', { el, isSwitch: true })
-                    : await this._enableAllPlugins(container, 'all', { el, isSwitch: true });
-                if (result && result.cancelled) return; // leave switch as-is on cancel
-                // loadPlugins re-renders lists but not the header; refresh the switch to the real state.
-                this._setupSafeModeToggle(container);
+        const disabledIconSlot = card.querySelector('[data-disabled-icon]');
+        if (disabledIconSlot) {
+            try {
+                disabledIconSlot.appendChild(this.ui.createIcon(disabled.icon || 'box'));
+            } catch (e) {
+                try { disabledIconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
             }
-        });
-        slot.appendChild(sw);
-    }
-
-    _renderDisabledPluginCards(panelContainer, container, typeFilter) {
-        const disabledPlugins = this._getDisabledPluginsForType(typeFilter);
-        if (disabledPlugins.length === 0) return;
-
-        disabledPlugins.forEach(disabled => {
-            const disabledDate = disabled.dateDisabled ? new Date(disabled.dateDisabled).toLocaleDateString() : 'Unknown date';
-            const card = document.createElement('div');
-            card.className = 'pm-card pm-card-disabled';
-            card.innerHTML = `
-                <div class="pm-card-iconrow"><span class="pm-card-icon" data-disabled-icon aria-hidden="true"></span></div>
-                <div class="pm-card-info">
-                    <h3 class="pm-card-title">
-                        <span class="pm-card-name">${this._escHtml(disabled.name || 'Unnamed Plugin')}</span>
-                        ${disabled.version ? `<span class="pm-badge pm-version-badge">v${this._escHtml(disabled.version)}</span>` : ''}
-                        <span class="pm-badge">Disabled</span>
-                    </h3>
-                    <p>Disabled on ${this._escHtml(disabledDate)}. Re-enable to reinstall in the official Plugins panel.</p>
-                    ${disabled.sourceRepo ? `<p class="pm-card-url-row"><span class="pm-card-url" data-external-url="${this._escHtml(disabled.sourceRepo)}">${this._escHtml(disabled.sourceRepo)}</span></p>` : ''}
-                </div>
-                <div class="pm-card-actions"></div>
-            `;
-
-            const disabledIconSlot = card.querySelector('[data-disabled-icon]');
-            if (disabledIconSlot) {
-                try {
-                    disabledIconSlot.appendChild(this.ui.createIcon(disabled.icon || 'box'));
-                } catch (e) {
-                    try { disabledIconSlot.appendChild(this.ui.createIcon('box')); } catch (e2) { }
-                }
-            }
-
-            const actionsContainer = card.querySelector('.pm-card-actions');
-            // Disabled toggle. OFF = disabled; turning ON reinstalls from GitHub.
-            const disabledSwitch = this._createToggleSwitch({
-                on: false,
-                title: 'Disabled — turn on to enable (reinstall from GitHub)',
-                ariaLabel: `${disabled.name || 'Plugin'} disabled. Turn on to enable.`,
-                onToggle: (sw) => this._enableDisabledPlugin(disabled, panelContainer, sw)
-            });
-            actionsContainer.appendChild(disabledSwitch);
-
-            // Carry over any stored color tint (keyed by source repo) for visual continuity.
-            this._applyCardColor(card, this._pluginColors[disabled.sourceRepo || disabled.guid || ''] || null);
-            container.appendChild(card);
-        });
-    }
-
-    renderPluginList(panelContainer, containerId, plugins, typeFilter) {
-        const container = panelContainer.querySelector(`#${containerId}`);
-        container.innerHTML = '';
-
-        if (plugins.length === 0 && this._getDisabledPluginsForType(typeFilter).length === 0) {
-            container.innerHTML = '<div class="pm-card"><div class="pm-card-info"><p>No items found.</p></div></div>';
-            return;
         }
 
-        // Toggle Update All button visibility if there are known updates for this tab
-        try {
-            const availableUpdates = this._readUpdateCache();
-            let hasUpdatesForTab = false;
-            for (const p of plugins) {
-                if (availableUpdates[p.getGuid()]) {
-                    hasUpdatesForTab = true;
-                    break;
-                }
-            }
+        const actionsContainer = card.querySelector('.pm-card-actions');
+        // Disabled toggle. OFF = disabled; turning ON reinstalls (GitHub, or stashed local code).
+        const disabledSwitch = this._createToggleSwitch({
+            on: false,
+            title: disabled.sourceRepo ? 'Disabled — turn on to enable (reinstall from GitHub)' : 'Disabled — turn on to enable (restore saved code)',
+            ariaLabel: `${disabled.name || 'Plugin'} disabled. Turn on to enable.`,
+            onToggle: (sw) => this._enableDisabledPlugin(disabled, panelContainer, sw)
+        });
+        actionsContainer.appendChild(disabledSwitch);
 
-            const btnId = typeFilter === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
-            const updateAllBtn = panelContainer.querySelector(btnId);
-            if (updateAllBtn) {
-                updateAllBtn.style.display = hasUpdatesForTab ? 'inline-block' : 'none';
-            }
-        } catch (e) { }
+        // Disabled plugins can be color-tagged too (same key, so the tag survives re-enabling).
+        this._attachColorButton(card, actionsContainer, this._ghostColorKey(disabled), panelContainer, typeFilter);
+        return card;
+    }
 
-        plugins.forEach(p => {
-            let conf;
-            try {
-                // For global plugins, getExistingCodeAndConfig works. CollectionPlugin might need getConfiguration()
-                // The SDK types suggest getExistingCodeAndConfig is on PluginPluginAPIBase which both extend.
-                const codeAndConfig = p.getExistingCodeAndConfig();
-                conf = codeAndConfig.json;
-            } catch (e) {
-                // Fallback
-                conf = { name: "Unknown", version: "Unknown" };
-            }
+    _ghostColorKey(disabled) {
+        return disabled.sourceRepo || disabled.guid || '';
+    }
 
+    _ghostColorHex(disabled) {
+        return this._pluginColors[this._ghostColorKey(disabled)] || null;
+    }
+
+    // The color key for a normalized list descriptor (live or ghost).
+    _itemColorKey(it) {
+        return it.kind === 'live'
+            ? this._pluginColorKey(it.conf, it.plugin.getGuid())
+            : this._ghostColorKey(it.disabled);
+    }
+
+    // Attach the color-tag button to a card's action row and paint the card's current tint.
+    // Shared by live and disabled cards so both can be color-tagged.
+    _attachColorButton(card, actionsContainer, colorKey, panelContainer, typeFilter) {
+        const storedHex = this._pluginColors[colorKey] || null;
+
+        const colorBtn = document.createElement('button');
+        colorBtn.type = 'button';
+        colorBtn.className = 'pm-color-btn';
+        this._updateColorBtn(colorBtn, storedHex);
+        actionsContainer.appendChild(colorBtn);
+
+        colorBtn.addEventListener('click', () => {
+            if (this._colorPopover) { this._closeColorPopover(); return; }
+            this._openColorPopover(colorBtn, this._pluginColors[colorKey] || null, (hex) => {
+                if (hex) this._pluginColors[colorKey] = hex;
+                else delete this._pluginColors[colorKey];
+                this._savePluginColors();
+
+                // Keep the descriptor cache in step so color sort + the color filter row
+                // reflect the change immediately instead of going stale until a reload.
+                const items = this._listCache[typeFilter] || [];
+                const desc = items.find(it => this._itemColorKey(it) === colorKey);
+                if (desc) desc.colorHex = hex || null;
+
+                this._renderFilteredList(panelContainer, typeFilter);
+            });
+        });
+
+        this._applyCardColor(card, storedHex);
+    }
+
+    // Build one live plugin card. Returns the element; the caller appends it.
+    _renderLiveCard(p, conf, panelContainer, availableUpdates, typeFilter) {
             const sourceRepo = conf.__source_repo || '';
-            const isLocal = !sourceRepo;
 
             const card = document.createElement('div');
             card.className = 'pm-card';
@@ -1620,8 +2006,8 @@ class Plugin extends AppPlugin {
 
             const actionsContainer = card.querySelector('.pm-card-actions');
 
-            // Check if updates are available in cache
-            const updates = this._readUpdateCache();
+            // Update availability (cache passed in — read once per render, not per card)
+            const updates = availableUpdates || {};
             const updateInfo = updates[p.getGuid()];
             const remoteVersion = updateInfo ? updateInfo.version : null;
             const installedVersion = conf.version || conf.ver;
@@ -1665,7 +2051,7 @@ class Plugin extends AppPlugin {
                 actionsContainer.appendChild(reinstallBtn);
 
                 reinstallBtn.addEventListener('click', async () => {
-                    if (!confirm(`Reinstall ${conf.name} from source?\n\nThis will overwrite local code with the latest from GitHub, even if the version number hasn't changed.`)) return;
+                    if (!await this._showConfirmModal('Reinstall from source', `Reinstall ${conf.name} from source?\nThis will overwrite local code with the latest from GitHub, even if the version number hasn't changed.`, { confirmText: 'Reinstall', danger: true })) return;
                     try {
                         reinstallBtn.innerHTML = '';
                         reinstallBtn.appendChild(this.ui.createIcon('loader'));
@@ -1720,7 +2106,7 @@ class Plugin extends AppPlugin {
                 if (repoUrl === null) return; // cancelled
                 if (repoUrl === '') {
                     // Remove link
-                    if (!confirm('Clear the repository link? This will disable updates.')) return;
+                    if (!await this._showConfirmModal('Clear repository link', 'Clear the repository link? This will disable updates.', { confirmText: 'Clear link', danger: true })) return;
                 } else if (!this._isValidGithubUrl(repoUrl)) {
                     this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
                     return;
@@ -1745,7 +2131,7 @@ class Plugin extends AppPlugin {
             actionsContainer.appendChild(deleteBtn);
 
             deleteBtn.addEventListener('click', async () => {
-                if (confirm(`Are you sure you want to delete ${conf.name}?`)) {
+                if (await this._showConfirmModal('Delete plugin', `Are you sure you want to delete ${conf.name}?`, { confirmText: 'Delete', danger: true })) {
                     await p.trashPlugin();
                     this._autoExport(); // fire-and-forget
                     this.ui.addToaster({ title: "Plugin deleted", dismissible: true, autoDestroyTime: 3000 });
@@ -1764,29 +2150,282 @@ class Plugin extends AppPlugin {
             actionsContainer.appendChild(enabledSwitch);
 
             // Per-card color tag (pinned to the far bottom-right of the action row).
-            const colorKey = this._pluginColorKey(conf, p.getGuid());
-            const storedHex = this._pluginColors[colorKey] || null;
-            const colorBtn = document.createElement('button');
-            colorBtn.type = 'button';
-            colorBtn.className = 'pm-color-btn';
-            this._updateColorBtn(colorBtn, storedHex);
-            actionsContainer.appendChild(colorBtn);
-            colorBtn.addEventListener('click', () => {
-                if (this._colorPopover) { this._closeColorPopover(); return; }
-                this._openColorPopover(colorBtn, this._pluginColors[colorKey] || null, (hex) => {
-                    if (hex) this._pluginColors[colorKey] = hex;
-                    else delete this._pluginColors[colorKey];
-                    this._savePluginColors();
-                    this._applyCardColor(card, hex);
-                    this._updateColorBtn(colorBtn, hex);
+            this._attachColorButton(card, actionsContainer, this._pluginColorKey(conf, p.getGuid()), panelContainer, typeFilter);
+            return card;
+    }
+
+    // --- List search / sort / filter ---
+
+    _defaultListState() {
+        return { q: '', sort: 'name', status: 'all', color: null, view: 'grid' };
+    }
+
+    // Wire one tab's search box, sort dropdown and status chips. Chips are scoped to this
+    // tab's own group (class .pm-chip, NOT .pm-filter-chip) so the Discover tab's
+    // container-wide .pm-filter-chip handler keeps working.
+    _bindListControls(container, typeFilter) {
+        const suffix = typeFilter === 'app' ? 'global' : 'col';
+        const state = this._listState[typeFilter];
+        this._searchTimers = this._searchTimers || {};
+
+        const searchEl = container.querySelector(`#pm-search-${suffix}`);
+        if (searchEl) {
+            searchEl.value = state.q || '';
+            searchEl.addEventListener('input', () => {
+                clearTimeout(this._searchTimers[typeFilter]);
+                this._searchTimers[typeFilter] = setTimeout(() => {
+                    state.q = searchEl.value;
+                    this._renderFilteredList(container, typeFilter);
+                }, 130);
+            });
+        }
+
+        const sortEl = container.querySelector(`#pm-sort-${suffix}`);
+        if (sortEl) {
+            sortEl.value = state.sort;
+            sortEl.addEventListener('change', () => {
+                state.sort = sortEl.value;
+                this._saveListState();
+                this._renderFilteredList(container, typeFilter);
+            });
+        }
+
+        const statusGroup = container.querySelector(`#pm-status-${suffix}`);
+        if (statusGroup) {
+            statusGroup.querySelectorAll('.pm-chip').forEach(chip => {
+                chip.classList.toggle('active', chip.dataset.status === state.status);
+                chip.addEventListener('click', (e) => {
+                    const btn = e.currentTarget;
+                    statusGroup.querySelectorAll('.pm-chip').forEach(c => c.classList.remove('active'));
+                    btn.classList.add('active');
+                    state.status = btn.dataset.status;
+                    this._saveListState();
+                    this._renderFilteredList(container, typeFilter);
                 });
             });
+        }
 
-            this._applyCardColor(card, storedHex);
-            container.appendChild(card);
+        const viewGroup = container.querySelector(`#pm-view-${suffix}`);
+        if (viewGroup) {
+            const glyphs = { grid: 'layout-grid', list: 'list' };
+            viewGroup.querySelectorAll('.pm-seg').forEach(seg => {
+                seg.classList.toggle('active', seg.dataset.view === state.view);
+                try { seg.appendChild(this.ui.createIcon(glyphs[seg.dataset.view])); } catch (e) { }
+                seg.addEventListener('click', (e) => {
+                    const btn = e.currentTarget;
+                    viewGroup.querySelectorAll('.pm-seg').forEach(c => c.classList.remove('active'));
+                    btn.classList.add('active');
+                    state.view = btn.dataset.view;
+                    this._saveListState();
+                    this._renderFilteredList(container, typeFilter);
+                });
+            });
+        }
+        // The color-filter row is rebuilt (with its own listeners) by _renderColorFilter().
+    }
+
+    _saveListState() {
+        try {
+            // Search text is intentionally not persisted.
+            const out = {};
+            for (const tab of ['app', 'collection']) {
+                const s = this._listState[tab];
+                out[tab] = { sort: s.sort, status: s.status, color: s.color, view: s.view };
+            }
+            localStorage.setItem('pm_list_state', JSON.stringify(out));
+        } catch (e) { }
+    }
+
+    // Normalized descriptor for a live plugin — the shape we filter and sort on.
+    _liveDescriptor(p, panelContainer) {
+        let conf;
+        try {
+            conf = p.getExistingCodeAndConfig().json;
+        } catch (e) {
+            conf = { name: 'Unknown', version: 'Unknown' };
+        }
+        const attr = this._pluginAttribution(conf);
+        return {
+            kind: 'live',
+            plugin: p,
+            conf,
+            name: conf.name || 'Unnamed Plugin',
+            description: conf.description || '',
+            version: conf.version || conf.ver || '',
+            sourceRepo: conf.__source_repo || '',
+            author: attr ? attr.label : '',
+            colorHex: this._pluginColors[this._pluginColorKey(conf, p.getGuid())] || null,
+            enabled: true
+        };
+    }
+
+    // Normalized descriptor for a disabled ("ghost") entry. Older entries predate the
+    // description/author fields, so fall back to the stashed json / the repo owner.
+    _ghostDescriptor(d) {
+        const author = this._pluginAttribution({
+            author: d.author || (d.json && d.json.author),
+            __source_repo: d.sourceRepo || ''
+        });
+        return {
+            kind: 'ghost',
+            disabled: d,
+            name: d.name || 'Unnamed Plugin',
+            description: d.description || (d.json && d.json.description) || '',
+            version: d.version || '',
+            sourceRepo: d.sourceRepo || '',
+            author: author ? author.label : '',
+            colorHex: this._ghostColorHex(d),
+            enabled: false
+        };
+    }
+
+    // Build (and cache) the descriptor list for one tab.
+    _buildListCache(typeFilter, plugins, panelContainer) {
+        const live = plugins.map(p => this._liveDescriptor(p, panelContainer));
+        const ghosts = this._getDisabledPluginsForType(typeFilter).map(d => this._ghostDescriptor(d));
+        this._listCache[typeFilter] = live.concat(ghosts);
+        return this._listCache[typeFilter];
+    }
+
+    _colorRank(hex) {
+        if (!hex) return PM_CARD_COLORS.length; // uncolored sorts last
+        const i = PM_CARD_COLORS.findIndex(c => c.hex.toLowerCase() === String(hex).toLowerCase());
+        return i === -1 ? PM_CARD_COLORS.length : i;
+    }
+
+    _applyListFilters(items, state) {
+        const q = (state.q || '').trim().toLowerCase();
+        return items.filter(it => {
+            if (state.status === 'active' && !it.enabled) return false;
+            if (state.status === 'inactive' && it.enabled) return false;
+            if (state.color && String(it.colorHex || '').toLowerCase() !== state.color.toLowerCase()) return false;
+            if (!q) return true;
+            const hay = `${it.name} ${it.description} ${it.author} ${it.version} ${it.sourceRepo}`.toLowerCase();
+            return hay.includes(q);
+        });
+    }
+
+    _sortListItems(items, sort) {
+        const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        const sorted = items.slice();
+        sorted.sort((a, b) => {
+            if (sort === 'author') {
+                // Empty authors sort last.
+                if (!a.author && b.author) return 1;
+                if (a.author && !b.author) return -1;
+                const c = a.author.localeCompare(b.author, undefined, { sensitivity: 'base' });
+                if (c !== 0) return c;
+            } else if (sort === 'color') {
+                const c = this._colorRank(a.colorHex) - this._colorRank(b.colorHex);
+                if (c !== 0) return c;
+            } else if (sort === 'status') {
+                if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+            }
+            return byName(a, b);
+        });
+        return sorted;
+    }
+
+    // Render the color-filter swatches for a tab — only the colors actually in use.
+    _renderColorFilter(panelContainer, typeFilter) {
+        const row = panelContainer.querySelector(typeFilter === 'app' ? '#pm-colorfilter-global' : '#pm-colorfilter-col');
+        if (!row) return;
+        const state = this._listState[typeFilter];
+        const items = this._listCache[typeFilter] || [];
+
+        const inUse = PM_CARD_COLORS.filter(c =>
+            items.some(it => String(it.colorHex || '').toLowerCase() === c.hex.toLowerCase())
+        );
+
+        row.innerHTML = '';
+        if (inUse.length === 0) {
+            row.classList.add('pm-hidden');
+            if (state.color) { state.color = null; this._saveListState(); }
+            return;
+        }
+        row.classList.remove('pm-hidden');
+
+        // A single "Color" button that opens the swatch popover — no swatch row in the toolbar.
+        const active = state.color
+            ? PM_CARD_COLORS.find(c => c.hex.toLowerCase() === state.color.toLowerCase())
+            : null;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'pm-btn pm-colorfilter-btn';
+        btn.title = active ? `Filtering by ${active.name} — click to change` : 'Filter by color';
+
+        const dot = document.createElement('span');
+        dot.className = 'pm-colorfilter-dot';
+        if (active) dot.style.background = active.hex;
+        else dot.dataset.any = '';
+        btn.appendChild(dot);
+        btn.appendChild(document.createTextNode(active ? active.name : 'Color'));
+
+        btn.addEventListener('click', () => {
+            if (this._colorPopover) { this._closeColorPopover(); return; }
+            // Only offer colors actually in use; the popover's "None" swatch clears the filter.
+            this._openColorPopover(btn, state.color, (hex) => {
+                state.color = hex || null;
+                this._saveListState();
+                this._renderFilteredList(panelContainer, typeFilter);
+            }, inUse);
         });
 
-        this._renderDisabledPluginCards(panelContainer, container, typeFilter);
+        row.appendChild(btn);
+    }
+
+    // Filter + sort the cached descriptors and (re)paint one tab's list.
+    // Called on every search keystroke / sort / filter change — no SDK re-fetch.
+    _renderFilteredList(panelContainer, typeFilter) {
+        const containerId = typeFilter === 'app' ? 'pm-global-list' : 'pm-collections-list';
+        const container = panelContainer.querySelector(`#${containerId}`);
+        if (!container) return;
+
+        const state = this._listState[typeFilter];
+        const all = this._listCache[typeFilter] || [];
+        const availableUpdates = this._readUpdateCache();
+
+        this._renderColorFilter(panelContainer, typeFilter);
+
+        const visible = this._sortListItems(this._applyListFilters(all, state), state.sort);
+
+        // Compact full-width rows vs the default card grid.
+        container.classList.toggle('pm-view-list', state.view === 'list');
+
+        container.innerHTML = '';
+
+        if (visible.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'pm-empty-state';
+            const filtering = !!(state.q || state.color || state.status !== 'all');
+            empty.textContent = all.length === 0
+                ? 'No items found.'
+                : (filtering ? 'No plugins match your search or filters.' : 'No items found.');
+            container.appendChild(empty);
+            return;
+        }
+
+        visible.forEach(it => {
+            const card = it.kind === 'live'
+                ? this._renderLiveCard(it.plugin, it.conf, panelContainer, availableUpdates, typeFilter)
+                : this._renderGhostCard(it.disabled, panelContainer, typeFilter);
+            container.appendChild(card);
+        });
+    }
+
+    // Show/hide a tab's "Update All" button based on the FULL (unfiltered) set.
+    _refreshUpdateAllVisibility(panelContainer, typeFilter) {
+        try {
+            const availableUpdates = this._readUpdateCache();
+            const items = this._listCache[typeFilter] || [];
+            const hasUpdates = items.some(it =>
+                it.kind === 'live' && availableUpdates[it.plugin.getGuid()]
+            );
+            const btnId = typeFilter === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
+            const btn = panelContainer.querySelector(btnId);
+            if (btn) btn.style.display = hasUpdates ? 'inline-block' : 'none';
+        } catch (e) { }
     }
 
 
@@ -1857,8 +2496,8 @@ class Plugin extends AppPlugin {
             delBtn.title = 'Remove theme';
             delBtn.appendChild(this.ui.createIcon('x'));
             actions.appendChild(delBtn);
-            delBtn.addEventListener('click', () => {
-                if (confirm(`Remove theme "${theme.name}"?`)) {
+            delBtn.addEventListener('click', async () => {
+                if (await this._showConfirmModal('Remove theme', `Remove theme "${theme.name}"?`, { confirmText: 'Remove', danger: true })) {
                     this._savedThemes.splice(idx, 1);
                     this._saveThemes();
                     this._autoExport();
@@ -2066,6 +2705,82 @@ class Plugin extends AppPlugin {
      * @param {string} [defaultValue=''] - Pre-filled value for the input
      * @returns {Promise<string|null>} The user's input, or null if cancelled
      */
+    // Confirmation popover — replaces the browser's native confirm() AND a centred modal.
+    // It pops up right where the user clicked (on the card / button itself) rather than
+    // yanking focus to the middle of the screen. Resolves true/false; also serves as a
+    // two-way chooser via custom button labels.
+    _showConfirmModal(title, message, opts = {}) {
+        const confirmText = opts.confirmText || 'Confirm';
+        const cancelText = opts.cancelText || 'Cancel';
+        const danger = !!opts.danger;
+
+        return new Promise(resolve => {
+            const body = String(message || '')
+                .split('\n')
+                .filter(line => line.trim() !== '')
+                .map(line => `<p class="pm-confirm-line">${this._escHtml(line)}</p>`)
+                .join('');
+
+            // Transparent scrim catches outside clicks without dimming the whole panel.
+            const scrim = document.createElement('div');
+            scrim.className = 'pm-confirm-scrim';
+            scrim.innerHTML = `
+                <div class="pm-container pm-confirm-pop" role="dialog" aria-modal="true">
+                    <h3>${this._escHtml(title)}</h3>
+                    <div class="pm-confirm-body">${body}</div>
+                    <div class="pm-confirm-actions">
+                        <button class="pm-btn" data-confirm-cancel>${this._escHtml(cancelText)}</button>
+                        <button class="pm-btn ${danger ? 'danger' : 'primary'}" data-confirm-ok>${this._escHtml(confirmText)}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(scrim);
+            this._activeModals = this._activeModals || [];
+            this._activeModals.push(scrim);
+
+            const pop = scrim.querySelector('.pm-confirm-pop');
+
+            // Anchor to the clicked element if given, else to the last pointer position.
+            const rect = opts.anchor && opts.anchor.isConnected ? opts.anchor.getBoundingClientRect() : null;
+            const px = rect ? rect.left + rect.width / 2 : (this._lastPointer ? this._lastPointer.x : window.innerWidth / 2);
+            const py = rect ? rect.bottom : (this._lastPointer ? this._lastPointer.y : window.innerHeight / 2);
+
+            const pr = pop.getBoundingClientRect();
+            const M = 12;
+            let left = px - pr.width / 2;
+            let top = py + 10;
+            if (top + pr.height > window.innerHeight - M) top = Math.max(M, py - pr.height - 14); // flip above
+            left = Math.min(Math.max(M, left), window.innerWidth - pr.width - M);
+            pop.style.left = `${left}px`;
+            pop.style.top = `${Math.max(M, top)}px`;
+
+            const okBtn = pop.querySelector('[data-confirm-ok]');
+            const cancelBtn = pop.querySelector('[data-confirm-cancel]');
+            setTimeout(() => okBtn.focus(), 30);
+
+            let settled = false;
+            const close = (value) => {
+                if (settled) return;
+                settled = true;
+                document.removeEventListener('keydown', onKey, true);
+                if (scrim.parentNode) scrim.parentNode.removeChild(scrim);
+                this._activeModals = (this._activeModals || []).filter(m => m !== scrim);
+                resolve(value);
+            };
+            const onKey = (e) => {
+                if (e.key === 'Escape') { e.stopPropagation(); close(false); }
+                else if (e.key === 'Enter') { e.stopPropagation(); close(true); }
+            };
+            document.addEventListener('keydown', onKey, true);
+
+            okBtn.addEventListener('click', () => close(true));
+            cancelBtn.addEventListener('click', () => close(false));
+            scrim.addEventListener('mousedown', (e) => {
+                if (e.target === scrim) close(false); // clicking outside cancels
+            });
+        });
+    }
+
     _showPromptModal(title, message, defaultValue = '') {
         return new Promise(resolve => {
             const overlayHtml = `
@@ -2630,7 +3345,7 @@ class Plugin extends AppPlugin {
         const msg = 'Folder picker is not available in this build (common on the Thymer desktop app). '
             + 'Enable "download backup on each change" instead? Files will land in your Downloads folder.'
             + (originalError ? `\n\n(Reason: ${originalError})` : '');
-        if (!confirm(msg)) return;
+        if (!await this._showConfirmModal('Please confirm', msg, { confirmText: 'Continue' })) return;
         this._autoExportDirHandle = null;
         this._autoExportDirName = '';
         this._autoExportMode = 'download';
@@ -3148,7 +3863,7 @@ class Plugin extends AppPlugin {
             const filterIsGlobal = typeFilter === 'app';
 
             if (isGlobal !== filterIsGlobal) {
-                if (!confirm(`Warning: This repository appears to be a ${isGlobal ? 'Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Plugin' : 'Collection Plugin'}. Continue anyway?`)) {
+                if (!await this._showConfirmModal('Type mismatch', `This repository appears to be a ${isGlobal ? 'Plugin' : 'Collection Plugin'}, but you are trying to install it as a ${filterIsGlobal ? 'Plugin' : 'Collection Plugin'}.\nContinue anyway?`, { confirmText: 'Install anyway', danger: true })) {
                     return;
                 }
             }
@@ -3197,13 +3912,13 @@ class Plugin extends AppPlugin {
             if (!interactive) {
                 pType = 'app';
             } else {
-                const choice = confirm(`Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\n\nClick OK for Plugin, or Cancel for Collection Plugin.`);
+                const choice = await this._showConfirmModal('Which type is this?', `Could not auto-detect the type for "${jsonConf.name || 'Unknown'}".\nInstall it as a Plugin, or as a Collection Plugin?`, { confirmText: 'Plugin', cancelText: 'Collection Plugin' });
                 pType = choice ? 'app' : 'collection';
             }
         }
 
         if (existingPlugin) {
-            if (!interactive || confirm(`"${jsonConf.name}" already exists. Update/overwrite with the imported version?`)) {
+            if (!interactive || await this._showConfirmModal('Already installed', `"${jsonConf.name}" already exists. Update/overwrite with the imported version?`, { confirmText: 'Overwrite', danger: true })) {
                 targetPlugin = existingPlugin;
             } else {
                 return 'skipped';
@@ -3345,7 +4060,7 @@ class Plugin extends AppPlugin {
             return 0;
         });
 
-        if (!confirm(`Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\n\nWarning: This will overwrite any local code modifications for these plugins.`)) {
+        if (!await this._showConfirmModal('Update all', `Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\nThis will overwrite any local code modifications for these plugins.`, { confirmText: 'Update all' })) {
             return;
         }
 
@@ -3625,7 +4340,7 @@ class Plugin extends AppPlugin {
 
             const isFullOverride = document.getElementById('pm-import-full-override').checked;
             if (isFullOverride) {
-                if (!confirm(`WARNING: Full Override will delete existing ${sectionMeta.warningLabel} that are NOT in this backup. This cannot be undone. Are you sure?`)) {
+                if (!await this._showConfirmModal('Full override', `Full Override will DELETE existing ${sectionMeta.warningLabel} that are not in this backup.\nThis cannot be undone. Are you sure?`, { confirmText: 'Override', danger: true })) {
                     return;
                 }
             }
@@ -3799,7 +4514,7 @@ class Plugin extends AppPlugin {
             // Overwrite click handler to apply update
             const applyUpdate = async () => {
                 // Local modifications warning check (simple length/hash comparison could go here in future)
-                if (confirm(`Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\n\nWarning: This will overwrite any local code modifications.`)) {
+                if (await this._showConfirmModal('Update plugin', `Update ${currentConf.name} from v${currentConf.version} to v${remoteJson.version}?\nThis will overwrite any local code modifications.`, { confirmText: 'Update' })) {
                     this._validatePluginJS(remoteJson.name, remoteJs);
                     const sanitizedConf = this._sanitizePluginConfig(remoteJson);
                     if (currentConf.custom !== undefined) {
