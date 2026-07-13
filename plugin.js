@@ -4292,36 +4292,6 @@ class Plugin extends AppPlugin {
         }
     }
 
-    /**
-     * Latest commit on a plugin's repo, for the update toast. Best-effort by design: it costs one
-     * extra GitHub API call per updated plugin, and the API is capped at 60/hr unauthenticated
-     * (the update check already spends from that budget). Any failure — rate limit, private repo,
-     * network — resolves to null and the toast simply omits the commit line.
-     */
-    async _fetchLatestCommit(sourceRepo) {
-        try {
-            const m = String(sourceRepo || '').match(/github\.com\/([^\/]+)\/([^\/#?]+)/i);
-            if (!m) return null;
-            const owner = m[1];
-            const repo = m[2].replace(/\.git$/, '');
-
-            const headers = { 'Accept': 'application/vnd.github+json' };
-            if (this.githubPat) headers['Authorization'] = `Bearer ${this.githubPat}`;
-
-            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=1`, { headers });
-            if (!res.ok) return null;
-
-            const arr = await res.json();
-            const c = Array.isArray(arr) ? arr[0] : null;
-            if (!c) return null;
-
-            const subject = String((c.commit && c.commit.message) || '').split('\n')[0].trim();
-            return { sha: String(c.sha || '').slice(0, 7), subject: subject.slice(0, 100) };
-        } catch (e) {
-            return null;
-        }
-    }
-
     /** Panel path: resolve the tab's Update All button, then hand off to the headless core. */
     async _updateAllAvailable(container, filterType) {
         const btnId = filterType === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
@@ -4461,17 +4431,19 @@ class Plugin extends AppPlugin {
                     this._writeUpdateCache(availableUpdates);
                     this._updateStatusBarIcon();
                     if (notify) {
+                        // No commit lookup here on purpose: it would cost one extra GitHub API
+                        // call per updated plugin against the 60/hr unauthenticated cap that the
+                        // update check itself already draws from — i.e. reporting the update
+                        // could make the NEXT update check fail. The version delta is the part
+                        // that actually matters.
                         const fromV = conf.version || conf.ver || '?';
                         const toV = remoteJson.version || remoteJson.ver || '?';
-                        const label = `${remoteJson.name || conf.name} v${fromV} → v${toV}`;
-                        updated.push(label);
+                        updated.push(`${remoteJson.name || conf.name} v${fromV} → v${toV}`);
 
-                        // Best-effort; omitted silently if GitHub won't tell us.
-                        const commit = await this._fetchLatestCommit(sourceRepo);
                         this.ui.addToaster({
                             title: `Updated ${remoteJson.name || conf.name} (${i + 1}/${total})`,
-                            message: `v${fromV} → v${toV}` + (commit ? `\n${commit.subject} (${commit.sha})` : ''),
-                            autoDestroyTime: 4000,
+                            message: `v${fromV} → v${toV}`,
+                            autoDestroyTime: 3500,
                             dismissible: true,
                         });
                     }
