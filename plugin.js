@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.0';
+const PM_VERSION = '1.23.1';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -4404,6 +4404,13 @@ class Plugin extends AppPlugin {
                     onPrimary: () => this._clearProgressToast(),
                 });
                 const el = this._progressToast.element;
+                // Widen OUR toast only — an inline style on this one element, not a CSS rule, so
+                // no other plugin's toasts are touched. The default is narrow enough that a row
+                // like "Build Title from Properties — v1.1.4 → v1.1.6" wraps onto a second line,
+                // which breaks the one-plugin-per-line reading of the list. max-content lets it
+                // hug the longest row instead of always being wide.
+                el.style.width = 'max-content';
+                el.style.maxWidth = 'min(680px, 92vw)';
                 this._barNode = el.querySelector('.pm-toast-bar');
                 this._statusNode = el.querySelector('.pm-toast-status');
                 // HOST DOM PIN: Thymer renders the toast headline as `.toaster-title` (confirmed
@@ -4433,11 +4440,17 @@ class Plugin extends AppPlugin {
         }
     }
 
-    /** Check phase: a plugin has been scanned. It fills ONLY if it came back already current. */
-    _markStatusCell(index, filled) {
+    /**
+     * Check phase: a plugin has been scanned. It FILLS only if it came back already current —
+     * but it's marked scanned either way, so the bar advances even during a scan where nothing
+     * turns out to be up to date. Without that, checking 13 plugins that all need updating moved
+     * nothing on screen for the entire scan.
+     */
+    _markStatusCell(index, upToDate) {
         const s = this._status;
         if (!s || !s.cells[index]) return;
-        s.cells[index].filled = !!filled;
+        s.cells[index].scanned = true;
+        s.cells[index].filled = !!upToDate;
         this._renderStatus();
     }
 
@@ -4488,14 +4501,23 @@ class Plugin extends AppPlugin {
         const spin = SPINNER[this._statusFrame % SPINNER.length];
 
         const total = s.cells.length;
-        const current = s.cells.filter(c => c.filled).length;
+        const scanned = s.cells.filter(c => c.scanned).length;
 
         // THE BAR IS ALWAYS ON SCREEN, in every phase including the finished one, and it never
-        // rescales: one cell per plugin, filled = that plugin is up to date. Hollow cells are the
-        // work left to do, and they fill one by one as the checkmarks land below.
+        // rescales: one cell per plugin. Three states, because two weren't enough —
+        //
+        //   ▱ not looked at yet
+        //   ▨ checked, and it's BEHIND (this is the work)
+        //   ▰ up to date
+        //
+        // Filled still means exactly one thing: that plugin is current. But a plain filled/hollow
+        // bar sat dead still through the whole scan whenever most plugins were stale — nothing is
+        // "up to date" yet, so nothing filled. The hatched middle state is what makes the scan
+        // visibly advance, and it doubles as a preview of the work: after the check, every ▨ is a
+        // plugin about to be updated. They convert to ▰ one by one as the checkmarks land below.
         let bar;
         if (total > 0) {
-            bar = s.cells.map(c => (c.filled ? '▰' : '▱')).join('');
+            bar = s.cells.map(c => (c.filled ? '▰' : c.scanned ? '▨' : '▱')).join('');
         } else {
             // The first frames, before we've even counted the plugins. Nothing is known yet, so
             // the bar marches instead of filling — but there IS a bar.
@@ -4510,10 +4532,14 @@ class Plugin extends AppPlugin {
         const lines = [];
 
         if (s.phase === 'check') {
-            // No "(0/0)" before we've counted anything — the count appears once it means something.
+            // Counts what we've SCANNED, not what turned out to be current. Counting `current`
+            // here meant the headline froze at "(1/13)" for the whole scan when 12 of the 13 had
+            // updates pending — it read as a hang.
+            //
+            // No "(0/0)" before we've counted anything: the count appears once it means something.
             title = s.final
                 ? (s.title || 'Everything is up to date')
-                : `Checking for updates…${total > 0 ? ` (${current}/${total})` : ''}`;
+                : `Checking for updates…${total > 0 ? ` (${scanned}/${total})` : ''}`;
         } else {
             for (const it of s.items) {
                 let mark = '·';                                  // pending
