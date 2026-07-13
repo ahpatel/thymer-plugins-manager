@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.5';
+const PM_VERSION = '1.23.6';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -4442,7 +4442,14 @@ class Plugin extends AppPlugin {
                         const title = this._titleNode.getBoundingClientRect();
                         const box = wrap.getBoundingClientRect();
                         if (title.height && box.height) {
-                            wrap.style.top = `${(title.top + title.height / 2) - (box.height / 2) - host.top}px`;
+                            // Box-centring alone still reads ~4px high: the X is a Tabler WEBFONT
+                            // glyph, and its ink sits above the centre of the line box it's measured
+                            // in (the box reserves room for descenders the glyph never uses). Boxes
+                            // are centred, but the eye tracks ink, so nudge it onto the optical
+                            // centre. The measurement does the work; this only pays for the glyph.
+                            const GLYPH_INK_OFFSET = 4;
+                            const centred = (title.top + title.height / 2) - (box.height / 2) - host.top;
+                            wrap.style.top = `${centred + GLYPH_INK_OFFSET}px`;
                         }
                     }
                 }
