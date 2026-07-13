@@ -113,11 +113,14 @@ class Plugin extends AppPlugin {
         });
 
         /*
-         * Both update commands run fire-and-forget: the palette closes immediately, the work
-         * continues in the background, and everything is reported through toasts. Neither one
-         * opens the Plugins Manager panel — they are for updating without leaving what you're
-         * doing. (`notifyNew: false` suppresses the passive "updates available" nudge, since
-         * these commands report their own outcome.)
+         * Runs fire-and-forget: the palette closes immediately, the work continues in the
+         * background, and it never opens the Plugins Manager panel — the point is to update
+         * without leaving what you're doing.
+         *
+         * All progress goes through ONE replaceable status toast (`_toastProgress`), because
+         * Thymer overlays toasters instead of queueing them — a toast per step just buries the
+         * previous one. `announce`/`notifyNew: false` silence the check's own toasts for the
+         * same reason; this command reports its own outcome.
          */
         this.ui.addCommandPaletteCommand({
             label: "Update all Installed Plugins",
@@ -125,7 +128,8 @@ class Plugin extends AppPlugin {
             onSelected: () => {
                 void (async () => {
                     try {
-                        await this.checkForAllUpdatesInBackground({ manual: true, notifyNew: false });
+                        this._toastProgress('Checking for updates…');
+                        await this.checkForAllUpdatesInBackground({ manual: true, notifyNew: false, announce: false });
                         // No confirm dialog: choosing this command IS the confirmation, and a
                         // modal would defeat the point of it running unattended.
                         await this._applyAvailableUpdates({
@@ -136,7 +140,7 @@ class Plugin extends AppPlugin {
                         });
                     } catch (e) {
                         console.error(e);
-                        this.ui.addToaster({ title: 'Update All Failed', message: e.message, autoDestroyTime: 6000, dismissible: true });
+                        this._toastSummary('Update All Failed', e.message);
                     }
                 })();
             }
@@ -191,6 +195,7 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
+        this._clearProgressToast(); // don't leave a status toast stranded on screen
         this._closeColorPopover();
         if (this._pointerHandler) {
             document.removeEventListener('mousedown', this._pointerHandler, true);
@@ -238,7 +243,10 @@ class Plugin extends AppPlugin {
 
     async checkForAllUpdatesInBackground(options = {}) {
         const isManual = options.manual === true;
-        if (isManual) {
+        // `announce: false` — the caller is already showing its own status toast, and Thymer
+        // overlays toasters rather than queueing them, so a second one here would stack on top
+        // of it. Error toasts below are unaffected: those must always surface.
+        if (isManual && options.announce !== false) {
             this.ui.addToaster({ title: "Checking for updates...", message: "This may take a moment depending on the number of plugins.", autoDestroyTime: 3000, dismissible: true });
         }
 
@@ -4292,6 +4300,49 @@ class Plugin extends AppPlugin {
         }
     }
 
+    /**
+     * A single, replaceable status toast.
+     *
+     * Thymer OVERLAYS toasters rather than queueing them, so firing one per step buries the
+     * earlier ones and the whole stack becomes unreadable. addToaster() returns a PluginToaster
+     * with destroy(), so instead of adding a new toast per step we destroy the previous one and
+     * replace it — the status line updates in place and only one toast is ever on screen.
+     */
+    _toastProgress(title, message) {
+        this._clearProgressToast();
+        try {
+            this._progressToast = this.ui.addToaster({
+                title,
+                message: message || '',
+                dismissible: true,
+                autoDestroyTime: 30000, // safety net; normally replaced or cleared explicitly
+            });
+        } catch (e) { /* a toast is never worth failing an update over */ }
+    }
+
+    _clearProgressToast() {
+        try { if (this._progressToast) this._progressToast.destroy(); } catch (e) { }
+        this._progressToast = null;
+    }
+
+    /**
+     * Final report: ONE toast, listing everything that changed, that stays until dismissed.
+     * No autoDestroyTime — a summary that vanishes before it's read is worse than none.
+     */
+    _toastSummary(title, message) {
+        this._clearProgressToast();
+        try {
+            let t;
+            t = this.ui.addToaster({
+                title,
+                message: message || '',
+                dismissible: true,
+                primaryLabel: 'OK',
+                onPrimary: () => { try { if (t) t.destroy(); } catch (e) { } },
+            });
+        } catch (e) { }
+    }
+
     /** Panel path: resolve the tab's Update All button, then hand off to the headless core. */
     async _updateAllAvailable(container, filterType) {
         const btnId = filterType === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
@@ -4324,9 +4375,9 @@ class Plugin extends AppPlugin {
         if (this._updatingAll) return { count: 0, failed: 0 };
 
         const upToDate = () => {
-            if (announceNoop) {
-                this.ui.addToaster({ title: 'Everything is up to date', message: 'No plugin updates are available.', autoDestroyTime: 3500, dismissible: true });
-            }
+            // Replaces the "Checking for updates…" toast rather than landing on top of it.
+            if (announceNoop) this._toastProgress('Everything is up to date', 'No plugin updates are available.');
+            else this._clearProgressToast();
             return { count: 0, failed: 0 };
         };
 
@@ -4365,12 +4416,10 @@ class Plugin extends AppPlugin {
         }
 
         if (notify) {
-            this.ui.addToaster({
-                title: `Updating ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}…`,
-                message: pluginsToUpdate.map(p => { try { return p.getExistingCodeAndConfig().json.name; } catch (e) { return null; } }).filter(Boolean).join(', '),
-                autoDestroyTime: 4000,
-                dismissible: true,
-            });
+            this._toastProgress(
+                `Updating ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}…`,
+                pluginsToUpdate.map(p => { try { return p.getExistingCodeAndConfig().json.name; } catch (e) { return null; } }).filter(Boolean).join(', ')
+            );
         }
 
         this._updatingAll = true;
@@ -4438,14 +4487,14 @@ class Plugin extends AppPlugin {
                         // that actually matters.
                         const fromV = conf.version || conf.ver || '?';
                         const toV = remoteJson.version || remoteJson.ver || '?';
-                        updated.push(`${remoteJson.name || conf.name} v${fromV} → v${toV}`);
+                        updated.push(`${remoteJson.name || conf.name}  v${fromV} → v${toV}`);
 
-                        this.ui.addToaster({
-                            title: `Updated ${remoteJson.name || conf.name} (${i + 1}/${total})`,
-                            message: `v${fromV} → v${toV}`,
-                            autoDestroyTime: 3500,
-                            dismissible: true,
-                        });
+                        // Replaces the previous status toast rather than adding another; the
+                        // full list is reported once, at the end.
+                        this._toastProgress(
+                            `Updating… (${i + 1}/${total})`,
+                            `${remoteJson.name || conf.name}  v${fromV} → v${toV}`
+                        );
                     }
                 }
             } catch (e) {
@@ -4469,12 +4518,24 @@ class Plugin extends AppPlugin {
         else parts.push(`Successfully updated: ${successCount}`);
         if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
 
-        this.ui.addToaster({
-            title: failedNames.length > 0 ? "Update All Completed with Errors" : `Updated ${successCount} plugin${successCount === 1 ? '' : 's'}`,
-            message: parts.join('\n'),
-            dismissible: true,
-            autoDestroyTime: failedNames.length > 0 ? 10000 : 8000
-        });
+        const title = failedNames.length > 0
+            ? "Update All Completed with Errors"
+            : `Updated ${successCount} plugin${successCount === 1 ? '' : 's'}`;
+
+        if (notify) {
+            // Headless run: replace the status toast with ONE report that stays until dismissed.
+            // A summary that vanishes before it can be read is worse than no summary.
+            this._toastSummary(title, parts.join('\n'));
+        } else {
+            // Panel path: the list is right there and the button showed progress, so the old
+            // auto-dismissing toast is still the right call. Unchanged.
+            this.ui.addToaster({
+                title,
+                message: parts.join('\n'),
+                dismissible: true,
+                autoDestroyTime: failedNames.length > 0 ? 10000 : 8000
+            });
+        }
 
         return { count: successCount, failed: failedNames.length };
     }
