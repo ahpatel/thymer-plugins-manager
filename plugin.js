@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.2';
+const PM_VERSION = '1.23.3';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -123,7 +123,10 @@ class Plugin extends AppPlugin {
          * same reason; this command reports its own outcome.
          */
         this.ui.addCommandPaletteCommand({
-            label: "Update all Installed Plugins",
+            // The command ALWAYS checks first and only updates if it finds something, so name it
+            // for both halves — "Update all…" alone implies it will change things, which makes it
+            // a scary thing to run just to find out whether anything is out of date.
+            label: "Check for / Update all Installed Plugins",
             icon: "box",
             onSelected: () => {
                 void (async () => {
