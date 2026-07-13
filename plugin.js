@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.1';
+const PM_VERSION = '1.23.2';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -4504,20 +4504,22 @@ class Plugin extends AppPlugin {
         const scanned = s.cells.filter(c => c.scanned).length;
 
         // THE BAR IS ALWAYS ON SCREEN, in every phase including the finished one, and it never
-        // rescales: one cell per plugin. Three states, because two weren't enough —
+        // rescales: one cell per plugin, two states and only two.
         //
-        //   ▱ not looked at yet
-        //   ▨ checked, and it's BEHIND (this is the work)
+        //   ▱ not up to date (not checked yet, or checked and BEHIND)
         //   ▰ up to date
         //
-        // Filled still means exactly one thing: that plugin is current. But a plain filled/hollow
-        // bar sat dead still through the whole scan whenever most plugins were stale — nothing is
-        // "up to date" yet, so nothing filled. The hatched middle state is what makes the scan
-        // visibly advance, and it doubles as a preview of the work: after the check, every ▨ is a
-        // plugin about to be updated. They convert to ▰ one by one as the checkmarks land below.
+        // A cell fills for exactly one reason — that plugin is current — and it NEVER un-fills.
+        // Everything starts hollow; the check fills the ones that come back already current, and
+        // the ones that don't stay hollow until their update actually lands. So the hollow cells
+        // are always "the work left to do", and all-filled is always "everything is up to date".
+        //
+        // The SCAN's progress lives in the headline, not in the bar — a cell must not fill just
+        // because we looked at it. (An earlier attempt gave scanned-but-stale cells a hatched
+        // third glyph to animate the scan; it broke the one thing the bar is for.)
         let bar;
         if (total > 0) {
-            bar = s.cells.map(c => (c.filled ? '▰' : c.scanned ? '▨' : '▱')).join('');
+            bar = s.cells.map(c => (c.filled ? '▰' : '▱')).join('');
         } else {
             // The first frames, before we've even counted the plugins. Nothing is known yet, so
             // the bar marches instead of filling — but there IS a bar.
