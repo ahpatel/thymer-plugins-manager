@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.4';
+const PM_VERSION = '1.23.5';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -4430,7 +4430,22 @@ class Plugin extends AppPlugin {
                 // child resolves `right: 0` against the padding box, so the X would just move in
                 // along with the text. The title is the only line that reaches its row, so pad
                 // that instead — on our toast only, via the node we already hold.
-                if (this._titleNode) this._titleNode.style.paddingRight = '30px';
+                if (this._titleNode) {
+                    this._titleNode.style.paddingRight = '30px';
+                    // ...and centre the X on the headline instead of letting it sit jammed into the
+                    // corner. Measured rather than nudged by a magic offset, so it stays centred if
+                    // the theme's toast font size or padding differs.
+                    const dismiss = el.querySelector('.id--dismiss');
+                    const wrap = dismiss && dismiss.parentElement;
+                    if (wrap) {
+                        const host = el.getBoundingClientRect();
+                        const title = this._titleNode.getBoundingClientRect();
+                        const box = wrap.getBoundingClientRect();
+                        if (title.height && box.height) {
+                            wrap.style.top = `${(title.top + title.height / 2) - (box.height / 2) - host.top}px`;
+                        }
+                    }
+                }
             } catch (e) {
                 this._progressToast = null;
                 return;
@@ -4556,7 +4571,7 @@ class Plugin extends AppPlugin {
             //
             // No "(0/0)" before we've counted anything: the count appears once it means something.
             title = s.final
-                ? (s.title || 'Everything is up to date')
+                ? (s.title || 'Everything is up to date!')
                 : `Checking for updates…${total > 0 ? ` (${scanned}/${total})` : ''}`;
         } else {
             for (const it of s.items) {
@@ -4668,7 +4683,7 @@ class Plugin extends AppPlugin {
             // Nothing to update is still an OUTCOME, and it keeps the same toast: the check bar
             // simply lands full. Swapping in a separate plain toast here is what made the bar
             // vanish on the most common run of all — the one where everything is already current.
-            if (announceNoop) this._finishStatus('Everything is up to date');
+            if (announceNoop) this._finishStatus('Everything is up to date!');
             else this._clearProgressToast();
             return { count: 0, failed: 0 };
         };
