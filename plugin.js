@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.7';
+const PM_VERSION = '1.24.0';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -215,7 +215,12 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
-        this._clearProgressToast(); // don't leave a status toast stranded on screen
+        this._clearProgressToast(); // don't leave an IN-PROGRESS status toast stranded on screen
+        // NOTE: _dismissTimer is deliberately NOT cleared here. It is a one-shot whose only job is
+        // to remove a DOM node, and the finished report is detached precisely so that a reload
+        // can't take it away — the manager updating ITSELF tears down this context, and that run's
+        // report has to outlive it. Cancel the countdown on unload and a self-update would strand
+        // its own report on screen forever.
         this._closeColorPopover();
         if (this._pointerHandler) {
             document.removeEventListener('mousedown', this._pointerHandler, true);
@@ -4387,6 +4392,14 @@ class Plugin extends AppPlugin {
         );
 
         if (!this._progressToast) {
+            // A finished report the user clicked to keep is still on screen. Starting a new run
+            // must take it away, or the two stack — which is the entire problem this one-toast
+            // design exists to solve.
+            this._cancelAutoDismiss();
+            if (this._finishedToast) {
+                try { this._finishedToast.destroy(); } catch (e) { }
+                this._finishedToast = null;
+            }
             try {
                 /** @type {any} */
                 let toaster;
@@ -4411,6 +4424,11 @@ class Plugin extends AppPlugin {
                     // left the field null and made OK a no-op on the one toast it exists to close.
                     onPrimary: () => {
                         try { toaster.destroy(); } catch (e) { }
+                        // Don't leave a countdown pointing at a toast that's already gone.
+                        if (this._finishedToast === toaster) {
+                            this._cancelAutoDismiss();
+                            this._finishedToast = null;
+                        }
                         // Only tear down our own state if this is still the LIVE status toast; a
                         // detached one is just DOM at that point.
                         if (this._progressToast === toaster) this._clearProgressToast();
@@ -4535,11 +4553,64 @@ class Plugin extends AppPlugin {
         if (!this._progressToast) return;
         this._setStatus(title ? { final: true, title } : { final: true });
         this._stopStatusTimer();
+
+        // Read this BEFORE the detach nulls _status.
+        const failed = (this._status?.items || []).some(it => it.state === 'failed');
+
+        const toaster = this._progressToast;   // capture: the fields below are about to be nulled
         this._progressToast = null;
         this._barNode = null;
         this._statusNode = null;
         this._titleNode = null;
         this._status = null;
+
+        this._armAutoDismiss(toaster, failed);
+    }
+
+    /**
+     * The finished report clears itself. Nobody wants to hand-dismiss "Everything is up to date!",
+     * which is how most runs end.
+     *
+     * Unless you show interest in it: one pointerdown inside the toast cancels the countdown for
+     * good, and it then stays until OK or ✕. pointerdown rather than click, so that dragging to
+     * select a row's text also counts as "I'm reading this".
+     *
+     * This can't use the toaster's own autoDestroyTime — that's fixed at creation, and we
+     * deliberately omit it so the ONE toast survives from the first check into its finished state.
+     * And it captures the toaster rather than reaching through `this._progressToast`, because
+     * finishing DETACHES and nulls that field.
+     */
+    _armAutoDismiss(toaster, failed) {
+        if (!toaster) return;
+        this._cancelAutoDismiss();
+        this._finishedToast = toaster;
+
+        // A failure row carries a reason now. 5s isn't long enough to notice one, let alone read
+        // it — and this matches the convention the plugin already uses elsewhere.
+        const ms = failed ? 10000 : 5000;
+
+        const keep = () => this._cancelAutoDismiss();
+        try { toaster.element.addEventListener('pointerdown', keep, { capture: true, once: true }); } catch (e) { }
+
+        this._dismissTimer = setTimeout(() => {
+            this._dismissTimer = null;
+            try { toaster.destroy(); } catch (e) { }
+            if (this._finishedToast === toaster) this._finishedToast = null;
+        }, ms);
+
+        this._cancelDismiss = () => {
+            if (this._dismissTimer) clearTimeout(this._dismissTimer);
+            this._dismissTimer = null;
+            try { toaster.element.removeEventListener('pointerdown', keep, { capture: true }); } catch (e) { }
+            this._cancelDismiss = null;
+        };
+    }
+
+    /** Stops the countdown. The toast then stays until OK or ✕. Idempotent. */
+    _cancelAutoDismiss() {
+        if (this._cancelDismiss) this._cancelDismiss();
+        this._dismissTimer = null;
+        this._cancelDismiss = null;
     }
 
     _renderStatus() {
