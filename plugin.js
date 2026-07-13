@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.22.0';
+const PM_VERSION = '1.22.2';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -2234,6 +2234,7 @@ class Plugin extends AppPlugin {
                     if (conf.custom !== undefined) {
                         sanitizedConf.custom = this._cloneJsonValue(conf.custom);
                     }
+                    this._preserveUserEdits(sanitizedConf, conf);
 
                     const isSelfUpdate = p.getGuid() === this.getGuid();
 
@@ -3731,7 +3732,12 @@ class Plugin extends AppPlugin {
             return sanitized;
         }
 
-        const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions', '__source_repo', '__source_files', 'ver'];
+        // `author`, `homepage`, `repository`, `instructions` and `coffee` are inert manifest
+        // metadata that the cards and the Discover tab already render. Dropping them meant an
+        // update quietly erased a plugin's author and links from its own card.
+        const ALLOWED_KEYS = ['name', 'type', 'description', 'version', 'icon', 'permissions',
+            'author', 'homepage', 'repository', 'instructions', 'coffee',
+            '__source_repo', '__source_files', '__source_meta', 'ver'];
         const COLLECTION_SCHEMA_KEYS = ['color', 'item_name', 'show_sidebar_items', 'show_cmdpal_items',
             'sidebar_action', 'fields', 'views', 'page_field_ids', 'sidebar_record_sort_field_id',
             'sidebar_record_sort_dir', 'managed', 'home', 'related_query', 'default_banner'];
@@ -3741,7 +3747,18 @@ class Plugin extends AppPlugin {
                 sanitized[key] = jsonConf[key];
             }
         }
-        const isCollection = (jsonConf.type || '').toLowerCase() === 'collection';
+        // A collection manifest is identified by its SHAPE, not by a `type` field: published
+        // collection plugins do not carry `"type": "collection"` at all — they declare `fields`
+        // and `views`. (Verified against the collection plugins on GitHub and the SDK examples.)
+        //
+        // Trusting `type` alone meant that for every collection plugin installed from GitHub, an
+        // update dropped `fields`, `views`, `item_name`, `page_field_ids` and `managed` from the
+        // config — i.e. it stripped the collection's entire schema. In practice Thymer rejects
+        // the resulting manifest, so the version never advances and the plugin is re-offered as
+        // "updatable" forever, reporting success on every run while nothing changes.
+        const isCollection = (jsonConf.type || '').toLowerCase() === 'collection'
+            || Array.isArray(jsonConf.fields)
+            || Array.isArray(jsonConf.views);
         if (isCollection) {
             for (const key of COLLECTION_SCHEMA_KEYS) {
                 if (jsonConf[key] !== undefined) {
@@ -3757,6 +3774,52 @@ class Plugin extends AppPlugin {
             sanitized.custom = JSON.parse(customJson);
         }
         return sanitized;
+    }
+
+
+    /**
+     * A plugin's manifest belongs to its AUTHOR, but a few fields become the USER'S the moment
+     * they edit them in Thymer — renaming a collection is the obvious one. Rebuilding the config
+     * from the remote manifest silently reverts those on every update: rename "Recall.ai Meetings"
+     * to "Meetings", update, and it's called "Recall.ai Meetings" again.
+     *
+     * `custom` was already preserved (the user's settings). This preserves the user's *presentation*
+     * edits the same way, and it does so without freezing them: `__source_meta` records what the
+     * source last shipped, so we can tell the two cases apart.
+     *
+     *   installed value === what the source last shipped  ->  user never touched it, take the
+     *                                                          author's new value (renames propagate)
+     *   installed value !== what the source last shipped  ->  the user changed it, keep theirs
+     *
+     * With no snapshot (installed before this existed) we favour the user, because their rename is
+     * the thing visibly lost and an author rename is merely delayed by one release.
+     *
+     * Identification never depended on any of this: updates are matched by GUID, and the repo link
+     * lives in `__source_repo`. A renamed plugin is still found and still updated.
+     */
+    _preserveUserEdits(nextConf, installedConf) {
+        const USER_OWNED = ['name', 'icon', 'color'];
+        const lastFromSource = installedConf.__source_meta || {};
+        const snapshot = {};
+
+        for (const key of USER_OWNED) {
+            if (nextConf[key] !== undefined) snapshot[key] = nextConf[key];
+
+            const installed = installedConf[key];
+            if (installed === undefined) continue;
+
+            const shipped = lastFromSource[key];
+            const userChangedIt = (shipped === undefined)
+                ? installed !== nextConf[key]   // no snapshot: any divergence is assumed to be theirs
+                : installed !== shipped;
+
+            if (userChangedIt) nextConf[key] = installed;
+        }
+
+        // Always record what the source shipped THIS time, so the next update can tell the
+        // difference even for fields the user has overridden.
+        nextConf.__source_meta = snapshot;
+        return nextConf;
     }
 
     /** Security: Strip dangerous CSS constructs that could exfiltrate data or execute scripts */
@@ -4617,6 +4680,7 @@ class Plugin extends AppPlugin {
                 if (conf.custom !== undefined) {
                     sanitizedConf.custom = this._cloneJsonValue(conf.custom);
                 }
+                this._preserveUserEdits(sanitizedConf, conf);
 
                 const isSelfUpdate = p.getGuid() === this.getGuid();
 
@@ -5093,6 +5157,7 @@ class Plugin extends AppPlugin {
                     if (currentConf.custom !== undefined) {
                         sanitizedConf.custom = this._cloneJsonValue(currentConf.custom);
                     }
+                    this._preserveUserEdits(sanitizedConf, currentConf);
 
                     const isSelfUpdate = pluginObj.getGuid() === this.getGuid();
 
