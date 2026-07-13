@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.22.0';
+const PM_VERSION = '1.24.0';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -123,13 +123,32 @@ class Plugin extends AppPlugin {
          * same reason; this command reports its own outcome.
          */
         this.ui.addCommandPaletteCommand({
-            label: "Update all Installed Plugins",
+            // The command ALWAYS checks first and only updates if it finds something, so name it
+            // for both halves — "Update all…" alone implies it will change things, which makes it
+            // a scary thing to run just to find out whether anything is out of date.
+            label: "Check for / Update all Installed Plugins",
             icon: "box",
             onSelected: () => {
                 void (async () => {
                     try {
                         this._toastProgress('Checking for updates…');
-                        await this.checkForAllUpdatesInBackground({ manual: true, notifyNew: false, announce: false });
+                        await this.checkForAllUpdatesInBackground({
+                            manual: true,
+                            notifyNew: false,
+                            announce: false,
+                            // Seeds one bar cell per plugin, then fills only the ones that come
+                            // back already current. The hollow remainder IS the pending work.
+                            onProgress: (ev) => {
+                                if (ev.init) {
+                                    this._setStatus({
+                                        phase: 'check',
+                                        cells: ev.init.map(c => ({ guid: c.guid, name: c.name, filled: false })),
+                                    });
+                                } else {
+                                    this._markStatusCell(ev.index, ev.upToDate);
+                                }
+                            },
+                        });
                         // No confirm dialog: choosing this command IS the confirmation, and a
                         // modal would defeat the point of it running unattended.
                         await this._applyAvailableUpdates({
@@ -186,6 +205,7 @@ class Plugin extends AppPlugin {
             }
         };
         document.addEventListener('click', this._globalMenuCloseHandler);
+
     }
 
     onUnload() {
@@ -195,7 +215,12 @@ class Plugin extends AppPlugin {
             this._updateIntervalId = null;
         }
         this._discoverItems = null;
-        this._clearProgressToast(); // don't leave a status toast stranded on screen
+        this._clearProgressToast(); // don't leave an IN-PROGRESS status toast stranded on screen
+        // NOTE: _dismissTimer is deliberately NOT cleared here. It is a one-shot whose only job is
+        // to remove a DOM node, and the finished report is detached precisely so that a reload
+        // can't take it away — the manager updating ITSELF tears down this context, and that run's
+        // report has to outlive it. Cancel the countdown on unload and a self-update would strand
+        // its own report on screen forever.
         this._closeColorPopover();
         if (this._pointerHandler) {
             document.removeEventListener('mousedown', this._pointerHandler, true);
@@ -255,28 +280,55 @@ class Plugin extends AppPlugin {
             const allGlobals = await this.data.getAllGlobalPlugins();
             const allCollections = await this.data.getAllCollections();
             const allPlugins = [...allGlobals, ...allCollections];
-            let checkCount = 0;
             const MAX_CHECKS = isManual ? 100 : 50; // Higher cap for manual checks
 
-            for (const p of allPlugins) {
-                if (checkCount >= MAX_CHECKS) break;
+            // Resolve the candidate set UP FRONT so the caller can show a determinate bar with one
+            // cell per plugin. Only plugins with a valid GitHub source are ever fetched, so
+            // counting them beforehand is what makes "3 of 12" honest rather than a guess.
+            const candidates = allPlugins.filter(p => {
+                try {
+                    const repo = p.getExistingCodeAndConfig().json.__source_repo;
+                    return !!repo && this._isValidGithubUrl(repo);
+                } catch (e) { return false; }
+            }).slice(0, MAX_CHECKS);
 
+            /**
+             * Reports one cell per plugin. `upToDate` is the ONLY thing that fills a cell — a
+             * plugin holding an update stays hollow until it has actually been updated. The bar
+             * therefore answers "is everything current?", not "how far through the loop am I?".
+             */
+            const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+            if (onProgress) {
+                onProgress({
+                    init: candidates.map(p => {
+                        try {
+                            const json = p.getExistingCodeAndConfig().json;
+                            return { guid: p.getGuid(), name: json.name || 'Unnamed Plugin' };
+                        } catch (e) { return { guid: null, name: 'Unknown' }; }
+                    })
+                });
+            }
+
+            for (let i = 0; i < candidates.length; i++) {
+                const p = candidates[i];
                 try {
                     const { json } = p.getExistingCodeAndConfig();
-                    const repo = json.__source_repo;
-                    if (repo && this._isValidGithubUrl(repo)) {
-                        checkCount++;
-                        const { json: remoteJson } = await this.fetchGithubRepo(repo, { sourceFiles: json.__source_files });
-                        if (remoteJson.version && remoteJson.version !== json.version) {
-                            updatesAvailable[p.getGuid()] = {
-                                name: json.name || "Unnamed Plugin",
-                                version: remoteJson.version
-                            };
-                        }
-                        // Avoid GitHub rate limiting between requests
-                        await new Promise(r => setTimeout(r, isManual ? 500 : 1000));
+                    const { json: remoteJson } = await this.fetchGithubRepo(json.__source_repo, { sourceFiles: json.__source_files });
+                    const hasUpdate = !!(remoteJson.version && remoteJson.version !== json.version);
+                    if (hasUpdate) {
+                        updatesAvailable[p.getGuid()] = {
+                            name: json.name || "Unnamed Plugin",
+                            version: remoteJson.version
+                        };
                     }
+                    // Fills only if it's already current. Stale ones stay hollow for the update
+                    // phase to fill in.
+                    if (onProgress) onProgress({ index: i, upToDate: !hasUpdate });
+                    // Avoid GitHub rate limiting between requests
+                    await new Promise(r => setTimeout(r, isManual ? 500 : 1000));
                 } catch (e) {
+                    // Couldn't reach it — we can't claim it's current, so its cell stays hollow.
+                    if (onProgress) onProgress({ index: i, upToDate: false });
                     if (e.message && (e.message.includes('rate limit') || e.message.includes('403'))) {
                         console.warn('[Plugins Manager] GitHub rate limit hit during check, stopping early.');
                         if (isManual) {
@@ -4312,45 +4364,125 @@ class Plugin extends AppPlugin {
      * Frames are drawn by a single interval; the update loop only pushes state via _setStatus()
      * and stays free of any animation logic.
      */
-    _toastProgress(title, message) {
-        this._setStatus({ title, line: message || '' });
+    _toastProgress(title) {
+        this._setStatus({ phase: 'check', title });
     }
 
     /**
+     * ONE cell per installed plugin, for the whole run. A cell fills when that plugin is known to
+     * be CURRENT — either the check found it already up to date, or the update phase just brought
+     * it up to date. A plugin holding an update stays hollow until it's actually been updated.
+     *
+     * So the bar answers "is everything up to date?" and the goal state is simply: all filled. It
+     * does NOT rescale to the size of the work — a single pending update used to collapse the bar
+     * to one lonely cell, which read as noise.
+     *
      * @param {object} patch
-     *   title  — the one headline: "Checking for updates…" → "Updating 3 plugins…" → "3 Plugins Updated"
-     *   total  — >0 switches the body from bare spinner to progress bar + per-plugin rows
-     *   items  — [{ name, state: 'pending'|'active'|'done'|'failed', from, to }]
-     *   done   — how many rows have settled (drives the bar)
-     *   final  — terminal; stops the animation and leaves the toast up
+     *   phase  — 'check' (scanning repos) | 'update' (applying)
+     *   title  — headline override; otherwise derived from phase + cells
+     *   cells  — [{ guid, name, filled }] one per plugin, stable order, spans BOTH phases
+     *   items  — [{ name, state: 'pending'|'active'|'done'|'failed', from, to }] update rows
+     *   final  — terminal; stops the animation and leaves the toast standing
      */
     _setStatus(patch) {
         this._status = Object.assign(
-            { title: '', total: 0, done: 0, items: [], final: false },
+            { phase: 'check', title: '', cells: [], items: [], final: false },
             this._status || {},
             patch
         );
 
         if (!this._progressToast) {
+            // A finished report the user clicked to keep is still on screen. Starting a new run
+            // must take it away, or the two stack — which is the entire problem this one-toast
+            // design exists to solve.
+            this._cancelAutoDismiss();
+            if (this._finishedToast) {
+                try { this._finishedToast.destroy(); } catch (e) { }
+                this._finishedToast = null;
+            }
             try {
-                this._progressToast = this.ui.addToaster({
+                /** @type {any} */
+                let toaster;
+                toaster = this.ui.addToaster({
                     title: this._status.title,
-                    // pre-line inline (not in plugin.css) so newlines render without shipping a
-                    // rule that would leak onto Thymer's toast chrome for every other plugin.
-                    messageHTML: '<span class="pm-toast-status" style="white-space: pre-line"></span>',
+                    // Two spans we OWN, so we can rewrite the body without pinning to Thymer's
+                    // internals. The bar gets its own element purely so it can be sized up — at
+                    // body font size the cells are too small to read as a progress bar.
+                    // pre-wrap (not pre-line) on the rows: pre-line collapses the double space
+                    // after each mark. Inline styles, not plugin.css, so nothing can leak onto
+                    // Thymer's toast chrome for every other plugin.
+                    messageHTML:
+                        '<span class="pm-toast-bar" style="display:block;font-size:1.7em;line-height:1.1;letter-spacing:2px;margin:2px 0 10px"></span>' +
+                        '<span class="pm-toast-status" style="white-space: pre-wrap"></span>',
                     dismissible: true,
-                    // No autoDestroyTime and an OK button from the START: this is the ONE toast for
-                    // the whole run, so it has to survive into the finished state. Handing off to a
-                    // separate summary toast is what made the bar flash past unread.
+                    // No autoDestroyTime: verified against the live app (a toaster with none is
+                    // still connected 12s later), and this ONE toast has to survive from the first
+                    // check all the way into its finished state. OK is the only way it leaves.
                     primaryLabel: 'OK',
-                    onPrimary: () => this._clearProgressToast(),
+                    // Destroy the toaster we CAPTURED, not `this._progressToast` — a finished run
+                    // detaches (drops our refs so a teardown can't take the report away), which
+                    // left the field null and made OK a no-op on the one toast it exists to close.
+                    onPrimary: () => {
+                        try { toaster.destroy(); } catch (e) { }
+                        // Don't leave a countdown pointing at a toast that's already gone.
+                        if (this._finishedToast === toaster) {
+                            this._cancelAutoDismiss();
+                            this._finishedToast = null;
+                        }
+                        // Only tear down our own state if this is still the LIVE status toast; a
+                        // detached one is just DOM at that point.
+                        if (this._progressToast === toaster) this._clearProgressToast();
+                        else this._stopStatusTimer();
+                    },
                 });
-                this._statusNode = this._progressToast.element.querySelector('.pm-toast-status');
-                // The title has no markup hook of ours, so find it by the exact text we just
-                // passed. If the structure ever changes we simply stop retitling — a toast is
-                // never worth throwing over.
-                this._titleNode = [...this._progressToast.element.querySelectorAll('*')]
-                    .find(el => el.children.length === 0 && el.textContent.trim() === this._status.title) || null;
+                this._progressToast = toaster;
+                const el = this._progressToast.element;
+                // Widen OUR toast only — an inline style on this one element, not a CSS rule, so
+                // no other plugin's toasts are touched. The default is narrow enough that a row
+                // like "Build Title from Properties — v1.1.4 → v1.1.6" wraps onto a second line,
+                // which breaks the one-plugin-per-line reading of the list. max-content lets it
+                // hug the longest row instead of always being wide.
+                el.style.width = 'max-content';
+                el.style.maxWidth = 'min(680px, 92vw)';
+                this._barNode = el.querySelector('.pm-toast-bar');
+                this._statusNode = el.querySelector('.pm-toast-status');
+                // HOST DOM PIN: Thymer renders the toast headline as `.toaster-title` (confirmed
+                // by probing the live app, 2026-07-13). If that class ever changes, the headline
+                // falls back into our own body span rather than silently freezing on the first
+                // string it was given — which is the failure mode that hid a broken headline for
+                // several rounds here.
+                this._titleNode = el.querySelector('.toaster-title')
+                    || [...el.querySelectorAll('*')].find(n => n.children.length === 0
+                        && n.textContent.trim() === this._status.title)
+                    || null;
+                // Keep the headline clear of the dismiss X, which is absolutely positioned at the
+                // toaster's top-right. Padding the TOASTER would not help: an absolutely positioned
+                // child resolves `right: 0` against the padding box, so the X would just move in
+                // along with the text. The title is the only line that reaches its row, so pad
+                // that instead — on our toast only, via the node we already hold.
+                if (this._titleNode) {
+                    this._titleNode.style.paddingRight = '30px';
+                    // ...and centre the X on the headline instead of letting it sit jammed into the
+                    // corner. Measured rather than nudged by a magic offset, so it stays centred if
+                    // the theme's toast font size or padding differs.
+                    const dismiss = el.querySelector('.id--dismiss');
+                    const wrap = dismiss && dismiss.parentElement;
+                    if (wrap) {
+                        const host = el.getBoundingClientRect();
+                        const title = this._titleNode.getBoundingClientRect();
+                        const box = wrap.getBoundingClientRect();
+                        if (title.height && box.height) {
+                            // Box-centring alone still reads ~4px high: the X is a Tabler WEBFONT
+                            // glyph, and its ink sits above the centre of the line box it's measured
+                            // in (the box reserves room for descenders the glyph never uses). Boxes
+                            // are centred, but the eye tracks ink, so nudge it onto the optical
+                            // centre. The measurement does the work; this only pays for the glyph.
+                            const GLYPH_INK_OFFSET = 4;
+                            const centred = (title.top + title.height / 2) - (box.height / 2) - host.top;
+                            wrap.style.top = `${centred + GLYPH_INK_OFFSET}px`;
+                        }
+                    }
+                }
             } catch (e) {
                 this._progressToast = null;
                 return;
@@ -4369,25 +4501,116 @@ class Plugin extends AppPlugin {
         }
     }
 
-    /** Settle one row and advance the bar. */
+    /** A toast row has room for a reason, not a stack trace. */
+    _shortError(e) {
+        let msg = (e && e.message) ? String(e.message) : String(e || 'failed');
+        msg = msg.replace(/\s+/g, ' ').trim();
+        return msg.length > 60 ? msg.slice(0, 57) + '…' : msg;
+    }
+
+    /**
+     * Check phase: a plugin has been scanned. It FILLS only if it came back already current —
+     * but it's marked scanned either way, so the bar advances even during a scan where nothing
+     * turns out to be up to date. Without that, checking 13 plugins that all need updating moved
+     * nothing on screen for the entire scan.
+     */
+    _markStatusCell(index, upToDate) {
+        const s = this._status;
+        if (!s || !s.cells[index]) return;
+        s.cells[index].scanned = true;
+        s.cells[index].filled = !!upToDate;
+        this._renderStatus();
+    }
+
+    /** Update phase: a plugin just became current, so its cell fills at last. */
+    _fillStatusCell(guid) {
+        const s = this._status;
+        if (!s) return;
+        const cell = s.cells.find(c => c.guid === guid);
+        if (cell) cell.filled = true;
+        this._renderStatus();
+    }
+
+    /** Settle one update row. */
     _markStatusItem(index, state, extra) {
         const s = this._status;
         if (!s || !s.items[index]) return;
         Object.assign(s.items[index], { state }, extra || {});
-        // Failures still count as progress — the bar tracks work completed, not work succeeded.
-        s.done = s.items.filter(it => it.state === 'done' || it.state === 'failed').length;
         this._renderStatus();
     }
 
     /**
      * Terminal state. The toast stays exactly where it is — bar full, rows checked off, headline
-     * settling from "Updating (2/3)" to "Updated (3/3)". _renderStatus() derives the headline from
-     * the rows, so there's no title to pass and no count to keep in step by hand.
+     * settling from "Updating (2/3)" to "Updated (3/3)".
+     *
+     * It also DETACHES: the toast is left on screen and our references are dropped, so a later
+     * teardown can't take the finished report away. That matters because the manager can update
+     * ITSELF, and saving self tears down this plugin's context — which would otherwise destroy
+     * the very report describing what just happened.
      */
-    _finishStatus() {
+    _finishStatus(title) {
         // If the user hit OK mid-run, they're done with it — don't resurrect a fresh toast on them.
         if (!this._progressToast) return;
-        this._setStatus({ final: true });
+        this._setStatus(title ? { final: true, title } : { final: true });
+        this._stopStatusTimer();
+
+        // Read this BEFORE the detach nulls _status.
+        const failed = (this._status?.items || []).some(it => it.state === 'failed');
+
+        const toaster = this._progressToast;   // capture: the fields below are about to be nulled
+        this._progressToast = null;
+        this._barNode = null;
+        this._statusNode = null;
+        this._titleNode = null;
+        this._status = null;
+
+        this._armAutoDismiss(toaster, failed);
+    }
+
+    /**
+     * The finished report clears itself. Nobody wants to hand-dismiss "Everything is up to date!",
+     * which is how most runs end.
+     *
+     * Unless you show interest in it: one pointerdown inside the toast cancels the countdown for
+     * good, and it then stays until OK or ✕. pointerdown rather than click, so that dragging to
+     * select a row's text also counts as "I'm reading this".
+     *
+     * This can't use the toaster's own autoDestroyTime — that's fixed at creation, and we
+     * deliberately omit it so the ONE toast survives from the first check into its finished state.
+     * And it captures the toaster rather than reaching through `this._progressToast`, because
+     * finishing DETACHES and nulls that field.
+     */
+    _armAutoDismiss(toaster, failed) {
+        if (!toaster) return;
+        this._cancelAutoDismiss();
+        this._finishedToast = toaster;
+
+        // A failure row carries a reason now. 5s isn't long enough to notice one, let alone read
+        // it — and this matches the convention the plugin already uses elsewhere.
+        const ms = failed ? 10000 : 5000;
+
+        const keep = () => this._cancelAutoDismiss();
+        try { toaster.element.addEventListener('pointerdown', keep, { capture: true, once: true }); } catch (e) { }
+
+        this._dismissTimer = setTimeout(() => {
+            this._dismissTimer = null;
+            try { toaster.destroy(); } catch (e) { }
+            if (this._finishedToast === toaster) this._finishedToast = null;
+        }, ms);
+
+        this._cancelDismiss = () => {
+            if (this._dismissTimer) clearTimeout(this._dismissTimer);
+            this._dismissTimer = null;
+            try { toaster.element.removeEventListener('pointerdown', keep, { capture: true }); } catch (e) { }
+            this._cancelDismiss = null;
+        };
+    }
+
+    /** Stops the countdown. The toast then stays until OK or ✕. Idempotent. */
+    _cancelAutoDismiss() {
+        if (this._cancelDismiss) this._cancelDismiss();
+        this._dismissTimer = null;
+        this._cancelDismiss = null;
     }
 
     _renderStatus() {
@@ -4398,49 +4621,82 @@ class Plugin extends AppPlugin {
         this._statusFrame = (this._statusFrame || 0) + 1;
         const spin = SPINNER[this._statusFrame % SPINNER.length];
 
-        let title = s.title;
+        const total = s.cells.length;
+        const scanned = s.cells.filter(c => c.scanned).length;
+
+        // THE BAR IS ALWAYS ON SCREEN, in every phase including the finished one, and it never
+        // rescales: one cell per plugin, two states and only two.
+        //
+        //   ▱ not up to date (not checked yet, or checked and BEHIND)
+        //   ▰ up to date
+        //
+        // A cell fills for exactly one reason — that plugin is current — and it NEVER un-fills.
+        // Everything starts hollow; the check fills the ones that come back already current, and
+        // the ones that don't stay hollow until their update actually lands. So the hollow cells
+        // are always "the work left to do", and all-filled is always "everything is up to date".
+        //
+        // The SCAN's progress lives in the headline, not in the bar — a cell must not fill just
+        // because we looked at it. (An earlier attempt gave scanned-but-stale cells a hatched
+        // third glyph to animate the scan; it broke the one thing the bar is for.)
+        let bar;
+        if (total > 0) {
+            bar = s.cells.map(c => (c.filled ? '▰' : '▱')).join('');
+        } else {
+            // The first frames, before we've even counted the plugins. Nothing is known yet, so
+            // the bar marches instead of filling — but there IS a bar.
+            const W = 12;
+            const pos = Math.floor(this._statusFrame / 2) % W;
+            const cells = Array(W).fill('▱');
+            for (let k = 0; k < 3; k++) cells[(pos + k) % W] = '▰';
+            bar = cells.join('');
+        }
+
+        let title;
         const lines = [];
 
-        if (s.total > 0) {
-            // One cell per plugin — the bar IS the plugin count, so it reads as a tally rather
-            // than an abstract percentage.
-            const filled = Math.max(0, Math.min(s.total, s.done));
-            lines.push(`${'▰'.repeat(filled)}${'▱'.repeat(s.total - filled)}`);
-            lines.push('');
-
+        if (s.phase === 'check') {
+            // Counts what we've SCANNED, not what turned out to be current. Counting `current`
+            // here meant the headline froze at "(1/13)" for the whole scan when 12 of the 13 had
+            // updates pending — it read as a hang.
+            //
+            // No "(0/0)" before we've counted anything: the count appears once it means something.
+            title = s.final
+                ? (s.title || 'Everything is up to date!')
+                : `Checking for updates…${total > 0 ? ` (${scanned}/${total})` : ''}`;
+        } else {
             for (const it of s.items) {
                 let mark = '·';                                  // pending
                 if (it.state === 'done') mark = '✓';
                 else if (it.state === 'failed') mark = '✗';
-                // A run cut short (self-update tears down our context) must not leave a row
-                // spinning forever, so a finished status downgrades stragglers back to pending.
+                // A run cut short must not leave a row spinning forever, so a finished status
+                // downgrades any straggler back to pending.
                 else if (it.state === 'active') mark = s.final ? '·' : spin;
 
-                // Mark leads the row: a fixed-width first column aligns for free, with no padding
-                // math and no dependence on a monospace face.
+                // Mark LEADS the row: a fixed first column aligns for free, with no padding math
+                // and no dependence on a monospace face.
                 //
-                // Target version comes from the update cache at seed time, so a plugin that fails
-                // still names the version it failed to reach.
+                // Both versions are seeded before the loop, so a plugin that FAILS still names the
+                // version it failed to reach.
                 const delta = it.to ? ` — v${it.from || '?'} → v${it.to}` : '';
-                lines.push(`${mark}  ${it.name}${delta}`);
+                const why = it.note ? `  (${it.note})` : '';
+                lines.push(`${mark}  ${it.name}${delta}${why}`);
             }
 
             const ok = s.items.filter(it => it.state === 'done').length;
             const bad = s.items.filter(it => it.state === 'failed').length;
-            title = `${s.final ? 'Updated' : 'Updating'} (${ok}/${s.total}) Plugin${s.total === 1 ? '' : 's'}`;
+            const n = s.items.length;
+            title = `${s.final ? 'Updated' : 'Updating'} (${ok}/${n}) Plugin${n === 1 ? '' : 's'}`;
             if (bad) title += ` • ${bad} Failed`;
         }
 
-        // While checking there's no bar and no rows, so the spinner rides the TITLE — the message
-        // body is a smaller, muted font where a braille glyph reads as a speck of dust. Once the
-        // bar and per-row spinners exist they carry the motion and the headline goes still.
-        const showTitleSpinner = !s.final && s.total === 0;
-
+        // The spinner rides the headline: the body is a smaller, muted font where a braille glyph
+        // reads as a speck of dust. It stops once the run is over.
         try {
+            if (this._barNode) this._barNode.textContent = bar;
             if (this._titleNode) {
-                this._titleNode.textContent = showTitleSpinner ? `${title}  ${spin}` : title;
-            } else if (showTitleSpinner) {
-                lines.unshift(spin);
+                this._titleNode.textContent = s.final ? title : `${title}  ${spin}`;
+            } else {
+                lines.unshift(s.final ? title : `${title}  ${spin}`); // degrades into our own body
             }
             if (this._statusNode) this._statusNode.textContent = lines.join('\n');
         } catch (e) {
@@ -4457,6 +4713,7 @@ class Plugin extends AppPlugin {
         this._stopStatusTimer();
         try { if (this._progressToast) this._progressToast.destroy(); } catch (e) { }
         this._progressToast = null;
+        this._barNode = null;
         this._statusNode = null;
         this._titleNode = null;
         this._status = null;
@@ -4513,20 +4770,11 @@ class Plugin extends AppPlugin {
         if (this._updatingAll) return { count: 0, failed: 0 };
 
         const upToDate = () => {
-            // Tears down the "Checking…" toast (and its spinner) rather than landing on top of it.
-            // This state is terminal, so it gets a plain toast — a spinner still turning next to
-            // "Everything is up to date" would read as "still working".
-            this._clearProgressToast();
-            if (announceNoop) {
-                try {
-                    this.ui.addToaster({
-                        title: 'Everything is up to date',
-                        message: 'No plugin updates are available.',
-                        dismissible: true,
-                        autoDestroyTime: 6000,
-                    });
-                } catch (e) { }
-            }
+            // Nothing to update is still an OUTCOME, and it keeps the same toast: the check bar
+            // simply lands full. Swapping in a separate plain toast here is what made the bar
+            // vanish on the most common run of all — the one where everything is already current.
+            if (announceNoop) this._finishStatus('Everything is up to date!');
+            else this._clearProgressToast();
             return { count: 0, failed: 0 };
         };
 
@@ -4565,19 +4813,21 @@ class Plugin extends AppPlugin {
         }
 
         if (notify) {
-            // Same toast, second act: the indeterminate spinner becomes a bar plus one row per
-            // plugin, seeded pending. Rows settle in place as the loop walks them.
+            // Same toast, second act. The BAR IS UNTOUCHED — it still carries one cell per
+            // installed plugin, with the stale ones hollow. What's added is a row per plugin being
+            // updated; as each lands, its checkmark appears here AND its cell fills above. All
+            // filled == everything up to date, which is the whole point of the bar.
             //
             // Both versions are known up front — the installed one from the plugin's own config,
             // the target one from the update cache — so a row that FAILS can still report the
             // version it failed to reach, even if it blew up before the fetch.
             this._setStatus({
-                title: 'Updating…',
-                total: pluginsToUpdate.length,
-                done: 0,
+                phase: 'update',
                 items: pluginsToUpdate.map(p => {
                     let name = 'Unknown';
                     let from = '?';
+                    let guid = null;
+                    try { guid = p.getGuid(); } catch (e) { }
                     try {
                         const json = p.getExistingCodeAndConfig().json;
                         name = json.name || name;
@@ -4585,7 +4835,7 @@ class Plugin extends AppPlugin {
                     } catch (e) { }
                     let to = '?';
                     try { to = (availableUpdates[p.getGuid()] || {}).version || '?'; } catch (e) { }
-                    return { name, from, to, state: 'pending' };
+                    return { guid, name, from, to, state: 'pending' };
                 }),
             });
         }
@@ -4634,6 +4884,7 @@ class Plugin extends AppPlugin {
                             from: conf.version || conf.ver || '?',
                             to: remoteJson.version || remoteJson.ver || '?',
                         });
+                        this._fillStatusCell(p.getGuid());
                     }
                     delete availableUpdates[p.getGuid()];
                     this._writeUpdateCache(availableUpdates);
@@ -4649,7 +4900,13 @@ class Plugin extends AppPlugin {
                     await p.savePlugin(sanitizedConf, remoteJs);
                 } else {
                     await p.savePlugin(sanitizedConf, remoteJs);
-                    // Only mark as updated once the save has actually succeeded.
+
+                    const toV = remoteJson.version || remoteJson.ver || '?';
+
+                    // Provisionally a success. Whether the CONFIG actually landed is checked once,
+                    // after the loop, against FRESHLY enumerated plugins — the object we just saved
+                    // through holds a cached manifest, so reading it back here returns the PRE-save
+                    // version and would fail every plugin that actually succeeded.
                     successCount++;
                     delete availableUpdates[p.getGuid()];
                     this._writeUpdateCache(availableUpdates);
@@ -4661,12 +4918,13 @@ class Plugin extends AppPlugin {
                         // could make the NEXT update check fail. The version delta is the part
                         // that actually matters.
                         const fromV = conf.version || conf.ver || '?';
-                        const toV = remoteJson.version || remoteJson.ver || '?';
                         updated.push(`${remoteJson.name || conf.name}  v${fromV} → v${toV}`);
 
-                        // Settles this row in the live toast: spinner → ✓ with the version delta.
-                        // No new toast, so nothing stacks and nothing is replaced.
+                        // Settles this row (spinner → ✓ with the version delta) AND fills this
+                        // plugin's cell in the bar — it is now up to date, which is the only thing
+                        // a filled cell ever means.
                         this._markStatusItem(i, 'done', { from: fromV, to: toV });
+                        this._fillStatusCell(p.getGuid());
                     }
                 }
             } catch (e) {
@@ -4674,8 +4932,52 @@ class Plugin extends AppPlugin {
                 try {
                     const conf = p.getExistingCodeAndConfig().json;
                     failedNames.push(conf.name || 'Unknown');
-                } catch (e) { failedNames.push(p.getGuid()); }
-                if (notify) this._markStatusItem(i, 'failed');
+                } catch (e2) { failedNames.push(p.getGuid()); }
+                // Put the reason ON the row. A bare ✗ with no explanation is not a report.
+                if (notify) this._markStatusItem(i, 'failed', { note: this._shortError(e) });
+            }
+        }
+
+        // Did the config ACTUALLY land? savePlugin() resolves without saying so — Thymer can take
+        // the code and quietly keep the old manifest (that's what happens to a collection plugin
+        // whose schema got stripped). The version then never advances, the plugin is re-offered on
+        // every check, and "Updated ✓" is a lie.
+        //
+        // This has to read from FRESHLY enumerated plugins: the objects we saved through hold a
+        // cached manifest, so reading one back inline returns the pre-save version and reports a
+        // failure for every plugin that actually succeeded.
+        const selfGuid = this.getGuid();
+        const toVerify = (notify ? this._status?.items || [] : []).filter(
+            it => it.state === 'done' && it.guid && it.guid !== selfGuid
+        );
+        if (toVerify.length) {
+            const live = new Map();
+            try {
+                const all = [...await this.data.getAllGlobalPlugins(), ...await this.data.getAllCollections()];
+                for (const q of all) {
+                    try { live.set(q.getGuid(), q.getExistingCodeAndConfig().json); } catch (e) { }
+                }
+            } catch (e) { /* can't re-enumerate — trust the saves rather than cry wolf */ }
+
+            if (live.size) {
+                for (const it of toVerify) {
+                    const json = live.get(it.guid);
+                    if (!json) continue;
+                    const landed = json.version || json.ver || (json.custom || {}).pluginVersion || '?';
+                    if (landed === it.to) continue;
+
+                    // Half-updated: new code, stale manifest. Put it BACK in the cache so the next
+                    // check still sees it, and say so on the row.
+                    const idx = this._status.items.indexOf(it);
+                    successCount = Math.max(0, successCount - 1);
+                    failedNames.push(`${it.name} (config did not save)`);
+                    availableUpdates[it.guid] = { name: it.name, version: it.to };
+                    this._writeUpdateCache(availableUpdates);
+                    this._updateStatusBarIcon();
+                    const cell = this._status.cells.find(c => c.guid === it.guid);
+                    if (cell) cell.filled = false;              // it is NOT up to date after all
+                    this._markStatusItem(idx, 'failed', { note: 'config did not save' });
+                }
             }
         }
 
