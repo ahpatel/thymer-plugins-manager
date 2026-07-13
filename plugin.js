@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.6';
+const PM_VERSION = '1.23.7';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -4388,7 +4388,9 @@ class Plugin extends AppPlugin {
 
         if (!this._progressToast) {
             try {
-                this._progressToast = this.ui.addToaster({
+                /** @type {any} */
+                let toaster;
+                toaster = this.ui.addToaster({
                     title: this._status.title,
                     // Two spans we OWN, so we can rewrite the body without pinning to Thymer's
                     // internals. The bar gets its own element purely so it can be sized up — at
@@ -4404,8 +4406,18 @@ class Plugin extends AppPlugin {
                     // still connected 12s later), and this ONE toast has to survive from the first
                     // check all the way into its finished state. OK is the only way it leaves.
                     primaryLabel: 'OK',
-                    onPrimary: () => this._clearProgressToast(),
+                    // Destroy the toaster we CAPTURED, not `this._progressToast` — a finished run
+                    // detaches (drops our refs so a teardown can't take the report away), which
+                    // left the field null and made OK a no-op on the one toast it exists to close.
+                    onPrimary: () => {
+                        try { toaster.destroy(); } catch (e) { }
+                        // Only tear down our own state if this is still the LIVE status toast; a
+                        // detached one is just DOM at that point.
+                        if (this._progressToast === toaster) this._clearProgressToast();
+                        else this._stopStatusTimer();
+                    },
                 });
+                this._progressToast = toaster;
                 const el = this._progressToast.element;
                 // Widen OUR toast only — an inline style on this one element, not a CSS rule, so
                 // no other plugin's toasts are touched. The default is narrow enough that a row
