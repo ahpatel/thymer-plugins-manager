@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.22.0';
+const PM_VERSION = '1.22.1';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -2016,9 +2016,19 @@ class Plugin extends AppPlugin {
         // margin-left:auto, which only lands correctly if it is the final child — same order as
         // the live card, so both card types read identically.
 
-        // Disabled plugins can be color-tagged too (same key, so the tag survives re-enabling).
         const actionsWrapper = document.createElement('div');
         actionsWrapper.className = 'pm-card-actions-wrapper';
+
+        // Disabling a plugin UNINSTALLS it (trashPlugin) and stashes a record, so there is no
+        // plugin object behind this card — which is why Update and Reinstall are absent: there is
+        // nothing installed to update, and re-enabling IS the reinstall (the toggle does it).
+        //
+        // But the actions that operate on the STASHED RECORD work perfectly well, and dropping
+        // them meant a disabled plugin could never be deleted. It just sat in the list forever,
+        // with the only way out being to re-enable it first and then delete it.
+        actionsWrapper.appendChild(this._buildGhostLinkBtn(disabled, panelContainer));
+        actionsWrapper.appendChild(this._buildGhostDeleteBtn(disabled, panelContainer));
+        // Disabled plugins can be color-tagged too (same key, so the tag survives re-enabling).
         this._attachColorButton(card, actionsWrapper, this._ghostColorKey(disabled), panelContainer, typeFilter);
         actionsContainer.appendChild(actionsWrapper);
 
@@ -2056,6 +2066,114 @@ class Plugin extends AppPlugin {
         actionsContainer.appendChild(disabledSwitch);
 
         return card;
+    }
+
+    /** The stash is keyed by repo, falling back to a local guid key. Mirrors _disablePluginCore. */
+    _ghostKey(disabled) {
+        return disabled.key || disabled.sourceRepo || ('local:' + disabled.guid);
+    }
+
+    /**
+     * Delete a DISABLED plugin — i.e. forget its stashed record for good.
+     *
+     * Without this, disabling a plugin trapped it: the card had no delete button, so the only way
+     * to get rid of it was to re-enable it (reinstalling the thing you wanted gone) and then
+     * delete that.
+     */
+    _buildGhostDeleteBtn(disabled, panelContainer) {
+        const btn = document.createElement('button');
+        btn.className = 'pm-btn danger pm-btn-delete';
+        btn.title = 'Delete Plugin';
+        btn.appendChild(this.ui.createIcon('trash'));
+        const label = document.createElement('span');
+        label.className = 'pm-btn-label';
+        label.textContent = 'Delete';
+        btn.appendChild(label);
+
+        btn.addEventListener('click', async () => {
+            const name = disabled.name || 'this plugin';
+            // A GitHub plugin can always be reinstalled from its repo. A LOCAL one cannot: disabling
+            // it uninstalled the original, so the stashed copy is the only one left anywhere. Say so.
+            const msg = disabled.sourceRepo
+                ? `Delete ${name}?\nIt remains available at ${disabled.sourceRepo}, so you can install it again later.`
+                : `Delete ${name}?\nIts code is saved ONLY here — there is no repo to reinstall from, so this cannot be undone.`;
+            if (!await this._showConfirmModal('Delete plugin', msg, { confirmText: 'Delete', danger: true })) return;
+
+            delete this._disabledPlugins[this._ghostKey(disabled)];
+            this._saveDisabledPlugins();
+            this.ui.addToaster({ title: 'Plugin deleted', dismissible: true, autoDestroyTime: 3000 });
+            this.loadPlugins(panelContainer);
+        });
+
+        return btn;
+    }
+
+    /**
+     * Link / relink a DISABLED plugin's repo. Useful precisely while it's off: a plugin whose repo
+     * moved can be pointed at the new one and then switched back on, instead of having to enable it
+     * (which would fail against the dead URL) just to fix the link.
+     */
+    _buildGhostLinkBtn(disabled, panelContainer) {
+        const btn = document.createElement('button');
+        btn.className = 'pm-btn pm-btn-link';
+        btn.title = disabled.sourceRepo ? 'Edit GitHub repo link' : 'Link to a GitHub repo for updates';
+        btn.appendChild(this.ui.createIcon('link'));
+        const label = document.createElement('span');
+        label.className = 'pm-btn-label';
+        label.textContent = 'Link Repository';
+        btn.appendChild(label);
+
+        btn.addEventListener('click', async () => {
+            const repoUrl = await this._showPromptModal('Link GitHub Repository', 'Enter the GitHub repo URL for this plugin:', disabled.sourceRepo || '');
+            if (repoUrl === null) return; // cancelled
+
+            if (repoUrl === '') {
+                // Clearing the repo of a stash that has no saved code would strand it: nothing to
+                // fetch from, nothing to restore, and re-enabling becomes impossible.
+                if (!disabled.code) {
+                    this.ui.addToaster({
+                        title: 'Cannot clear the link',
+                        message: `${disabled.name || 'This plugin'} has no saved code, so its repo is the only way to bring it back. Delete it instead.`,
+                        autoDestroyTime: 6000, dismissible: true
+                    });
+                    return;
+                }
+                if (!await this._showConfirmModal('Clear repository link', 'Clear the repository link? It will be restored from its saved code instead of GitHub.', { confirmText: 'Clear link', danger: true })) return;
+            } else if (!this._isValidGithubUrl(repoUrl)) {
+                this.ui.addToaster({ title: 'Invalid URL', message: 'Please enter a valid github.com URL.', autoDestroyTime: 4000, dismissible: true });
+                return;
+            }
+
+            // The stash is KEYED by repo, so changing the link re-keys the record — and the colour
+            // tag with it, since that is keyed the same way. Move both, or the entry gets orphaned
+            // under its old key and the card comes back wearing no colour.
+            const oldKey = this._ghostKey(disabled);
+            const oldColorKey = this._ghostColorKey(disabled);
+
+            disabled.sourceRepo = repoUrl || null;
+            if (!repoUrl) disabled.sourceFiles = null;
+            disabled.key = repoUrl || ('local:' + disabled.guid);
+
+            delete this._disabledPlugins[oldKey];
+            this._disabledPlugins[disabled.key] = disabled;
+            this._saveDisabledPlugins();
+
+            const newColorKey = this._ghostColorKey(disabled);
+            if (newColorKey !== oldColorKey && this._pluginColors[oldColorKey]) {
+                this._pluginColors[newColorKey] = this._pluginColors[oldColorKey];
+                delete this._pluginColors[oldColorKey];
+                this._savePluginColors();
+            }
+
+            this.ui.addToaster({
+                title: 'Repo Updated',
+                message: repoUrl ? `${disabled.name} linked to ${repoUrl}.` : `${disabled.name} link removed.`,
+                autoDestroyTime: 4000, dismissible: true
+            });
+            this.loadPlugins(panelContainer);
+        });
+
+        return btn;
     }
 
     _ghostColorKey(disabled) {
