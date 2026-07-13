@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.23.3';
+const PM_VERSION = '1.23.4';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -4425,6 +4425,12 @@ class Plugin extends AppPlugin {
                     || [...el.querySelectorAll('*')].find(n => n.children.length === 0
                         && n.textContent.trim() === this._status.title)
                     || null;
+                // Keep the headline clear of the dismiss X, which is absolutely positioned at the
+                // toaster's top-right. Padding the TOASTER would not help: an absolutely positioned
+                // child resolves `right: 0` against the padding box, so the X would just move in
+                // along with the text. The title is the only line that reaches its row, so pad
+                // that instead — on our toast only, via the node we already hold.
+                if (this._titleNode) this._titleNode.style.paddingRight = '30px';
             } catch (e) {
                 this._progressToast = null;
                 return;
@@ -4441,6 +4447,13 @@ class Plugin extends AppPlugin {
         else if (!reduced && !this._statusTimer) {
             this._statusTimer = setInterval(() => this._renderStatus(), 80);
         }
+    }
+
+    /** A toast row has room for a reason, not a stack trace. */
+    _shortError(e) {
+        let msg = (e && e.message) ? String(e.message) : String(e || 'failed');
+        msg = msg.replace(/\s+/g, ' ').trim();
+        return msg.length > 60 ? msg.slice(0, 57) + '…' : msg;
     }
 
     /**
@@ -4560,7 +4573,8 @@ class Plugin extends AppPlugin {
                 // Both versions are seeded before the loop, so a plugin that FAILS still names the
                 // version it failed to reach.
                 const delta = it.to ? ` — v${it.from || '?'} → v${it.to}` : '';
-                lines.push(`${mark}  ${it.name}${delta}`);
+                const why = it.note ? `  (${it.note})` : '';
+                lines.push(`${mark}  ${it.name}${delta}${why}`);
             }
 
             const ok = s.items.filter(it => it.state === 'done').length;
@@ -4707,6 +4721,8 @@ class Plugin extends AppPlugin {
                 items: pluginsToUpdate.map(p => {
                     let name = 'Unknown';
                     let from = '?';
+                    let guid = null;
+                    try { guid = p.getGuid(); } catch (e) { }
                     try {
                         const json = p.getExistingCodeAndConfig().json;
                         name = json.name || name;
@@ -4714,7 +4730,7 @@ class Plugin extends AppPlugin {
                     } catch (e) { }
                     let to = '?';
                     try { to = (availableUpdates[p.getGuid()] || {}).version || '?'; } catch (e) { }
-                    return { name, from, to, state: 'pending' };
+                    return { guid, name, from, to, state: 'pending' };
                 }),
             });
         }
@@ -4780,30 +4796,12 @@ class Plugin extends AppPlugin {
                 } else {
                     await p.savePlugin(sanitizedConf, remoteJs);
 
-                    // savePlugin() resolves without telling us whether the CONFIG actually landed —
-                    // Thymer can accept the code and quietly keep the old manifest. When that
-                    // happens the version never advances, so the plugin is re-offered on every
-                    // check and "Updated ✓" is simply a lie. Read it back and believe the config,
-                    // not the call.
                     const toV = remoteJson.version || remoteJson.ver || '?';
-                    let landedV = toV;
-                    try {
-                        const after = p.getExistingCodeAndConfig().json;
-                        landedV = after.version || after.ver || (after.custom || {}).pluginVersion || '?';
-                    } catch (e) { /* can't read it back — trust the save rather than cry wolf */ }
 
-                    if (landedV !== toV) {
-                        // Half-updated: new code, stale manifest. Leave it in the cache so the next
-                        // check still sees it, and say so out loud.
-                        failedNames.push(`${remoteJson.name || conf.name} (config did not save)`);
-                        if (notify) this._markStatusItem(i, 'failed', {
-                            from: conf.version || conf.ver || '?',
-                            to: toV,
-                        });
-                        continue;
-                    }
-
-                    // Only mark as updated once the save has actually succeeded.
+                    // Provisionally a success. Whether the CONFIG actually landed is checked once,
+                    // after the loop, against FRESHLY enumerated plugins — the object we just saved
+                    // through holds a cached manifest, so reading it back here returns the PRE-save
+                    // version and would fail every plugin that actually succeeded.
                     successCount++;
                     delete availableUpdates[p.getGuid()];
                     this._writeUpdateCache(availableUpdates);
@@ -4829,8 +4827,52 @@ class Plugin extends AppPlugin {
                 try {
                     const conf = p.getExistingCodeAndConfig().json;
                     failedNames.push(conf.name || 'Unknown');
-                } catch (e) { failedNames.push(p.getGuid()); }
-                if (notify) this._markStatusItem(i, 'failed');
+                } catch (e2) { failedNames.push(p.getGuid()); }
+                // Put the reason ON the row. A bare ✗ with no explanation is not a report.
+                if (notify) this._markStatusItem(i, 'failed', { note: this._shortError(e) });
+            }
+        }
+
+        // Did the config ACTUALLY land? savePlugin() resolves without saying so — Thymer can take
+        // the code and quietly keep the old manifest (that's what happens to a collection plugin
+        // whose schema got stripped). The version then never advances, the plugin is re-offered on
+        // every check, and "Updated ✓" is a lie.
+        //
+        // This has to read from FRESHLY enumerated plugins: the objects we saved through hold a
+        // cached manifest, so reading one back inline returns the pre-save version and reports a
+        // failure for every plugin that actually succeeded.
+        const selfGuid = this.getGuid();
+        const toVerify = (notify ? this._status?.items || [] : []).filter(
+            it => it.state === 'done' && it.guid && it.guid !== selfGuid
+        );
+        if (toVerify.length) {
+            const live = new Map();
+            try {
+                const all = [...await this.data.getAllGlobalPlugins(), ...await this.data.getAllCollections()];
+                for (const q of all) {
+                    try { live.set(q.getGuid(), q.getExistingCodeAndConfig().json); } catch (e) { }
+                }
+            } catch (e) { /* can't re-enumerate — trust the saves rather than cry wolf */ }
+
+            if (live.size) {
+                for (const it of toVerify) {
+                    const json = live.get(it.guid);
+                    if (!json) continue;
+                    const landed = json.version || json.ver || (json.custom || {}).pluginVersion || '?';
+                    if (landed === it.to) continue;
+
+                    // Half-updated: new code, stale manifest. Put it BACK in the cache so the next
+                    // check still sees it, and say so on the row.
+                    const idx = this._status.items.indexOf(it);
+                    successCount = Math.max(0, successCount - 1);
+                    failedNames.push(`${it.name} (config did not save)`);
+                    availableUpdates[it.guid] = { name: it.name, version: it.to };
+                    this._writeUpdateCache(availableUpdates);
+                    this._updateStatusBarIcon();
+                    const cell = this._status.cells.find(c => c.guid === it.guid);
+                    if (cell) cell.filled = false;              // it is NOT up to date after all
+                    this._markStatusItem(idx, 'failed', { note: 'config did not save' });
+                }
             }
         }
 
