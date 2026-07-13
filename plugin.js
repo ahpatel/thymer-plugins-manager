@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.19.4';
+const PM_VERSION = '1.20.0';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -109,6 +109,36 @@ class Plugin extends AppPlugin {
                 if (newPanel) {
                     newPanel.navigateToCustomType("plugin-manager-panel");
                 }
+            }
+        });
+
+        /*
+         * Both update commands run fire-and-forget: the palette closes immediately, the work
+         * continues in the background, and everything is reported through toasts. Neither one
+         * opens the Plugins Manager panel — they are for updating without leaving what you're
+         * doing. (`notifyNew: false` suppresses the passive "updates available" nudge, since
+         * these commands report their own outcome.)
+         */
+        this.ui.addCommandPaletteCommand({
+            label: "Update all Installed Plugins",
+            icon: "box",
+            onSelected: () => {
+                void (async () => {
+                    try {
+                        await this.checkForAllUpdatesInBackground({ manual: true, notifyNew: false });
+                        // No confirm dialog: choosing this command IS the confirmation, and a
+                        // modal would defeat the point of it running unattended.
+                        await this._applyAvailableUpdates({
+                            scope: 'all',
+                            announceNoop: true,
+                            confirm: false,
+                            notify: true,
+                        });
+                    } catch (e) {
+                        console.error(e);
+                        this.ui.addToaster({ title: 'Update All Failed', message: e.message, autoDestroyTime: 6000, dismissible: true });
+                    }
+                })();
             }
         });
 
@@ -272,7 +302,10 @@ class Plugin extends AppPlugin {
                     }
                 }
 
-                if (hasNewUpdates) {
+                // `notifyNew: false` suppresses this passive nudge for callers that report the
+                // outcome themselves — otherwise an explicit "check for updates" command would
+                // toast twice.
+                if (hasNewUpdates && options.notifyNew !== false) {
                     this.ui.addToaster({
                         title: "Plugin Updates Available",
                         message: `${updateCount} plugin${updateCount === 1 ? '' : 's'} can be updated. Open Plugins Manager to apply.`,
@@ -4259,21 +4292,84 @@ class Plugin extends AppPlugin {
         }
     }
 
+    /**
+     * Latest commit on a plugin's repo, for the update toast. Best-effort by design: it costs one
+     * extra GitHub API call per updated plugin, and the API is capped at 60/hr unauthenticated
+     * (the update check already spends from that budget). Any failure — rate limit, private repo,
+     * network — resolves to null and the toast simply omits the commit line.
+     */
+    async _fetchLatestCommit(sourceRepo) {
+        try {
+            const m = String(sourceRepo || '').match(/github\.com\/([^\/]+)\/([^\/#?]+)/i);
+            if (!m) return null;
+            const owner = m[1];
+            const repo = m[2].replace(/\.git$/, '');
+
+            const headers = { 'Accept': 'application/vnd.github+json' };
+            if (this.githubPat) headers['Authorization'] = `Bearer ${this.githubPat}`;
+
+            const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=1`, { headers });
+            if (!res.ok) return null;
+
+            const arr = await res.json();
+            const c = Array.isArray(arr) ? arr[0] : null;
+            if (!c) return null;
+
+            const subject = String((c.commit && c.commit.message) || '').split('\n')[0].trim();
+            return { sha: String(c.sha || '').slice(0, 7), subject: subject.slice(0, 100) };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /** Panel path: resolve the tab's Update All button, then hand off to the headless core. */
     async _updateAllAvailable(container, filterType) {
         const btnId = filterType === 'app' ? '#pm-update-all-global-btn' : '#pm-update-all-col-btn';
-        const btn = container.querySelector(btnId);
-        if (!btn) return;
+        const btn = container ? container.querySelector(btnId) : null;
+        return this._applyAvailableUpdates({
+            scope: filterType,
+            container,
+            control: btn ? { el: btn, isSwitch: false } : null,
+        });
+    }
+
+    /**
+     * Apply every update already in the cache. Works with OR without the panel — the
+     * command-palette command runs it headless, so nothing here may assume panel DOM exists.
+     *
+     * @param {{scope?: string, container?: any, control?: any, announceNoop?: boolean}} [opts]
+     *   scope        'app' | 'collection' | 'all'
+     *   container    panel container, when the panel is open (drives the list re-render)
+     *   control      the button to show progress on, when there is one
+     *   announceNoop toast when there is nothing to do (a palette command that appears to do
+     *                nothing is unacceptable; the panel button is simply hidden in that case)
+     *   confirm      ask before overwriting. The panel button does; the palette command does
+     *                not — choosing "Update All" from the palette IS the confirmation, and a
+     *                modal would defeat the point of it running in the background.
+     *   notify       toast each plugin as it lands. With no button to spin, toasts are the only
+     *                way a backgrounded run can say what it's doing.
+     */
+    async _applyAvailableUpdates({ scope = 'all', container = null, control = null, announceNoop = false, confirm = true, notify = false } = {}) {
+        // Firing the command twice would run two loops racing on the same update cache.
+        if (this._updatingAll) return { count: 0, failed: 0 };
+
+        const upToDate = () => {
+            if (announceNoop) {
+                this.ui.addToaster({ title: 'Everything is up to date', message: 'No plugin updates are available.', autoDestroyTime: 3500, dismissible: true });
+            }
+            return { count: 0, failed: 0 };
+        };
 
         // Collect plugins that have known updates
         const availableUpdates = this._readUpdateCache();
-        if (Object.keys(availableUpdates).length === 0) return;
+        if (Object.keys(availableUpdates).length === 0) return upToDate();
 
         let pluginsToUpdate = [];
         try {
-            if (filterType === 'app' || filterType === 'all') {
+            if (scope === 'app' || scope === 'all') {
                 pluginsToUpdate = pluginsToUpdate.concat(await this.data.getAllGlobalPlugins());
             }
-            if (filterType === 'collection' || filterType === 'all') {
+            if (scope === 'collection' || scope === 'all') {
                 pluginsToUpdate = pluginsToUpdate.concat(await this.data.getAllCollections());
             }
         } catch (e) { }
@@ -4284,7 +4380,7 @@ class Plugin extends AppPlugin {
             } catch (e) { return false; }
         });
 
-        if (pluginsToUpdate.length === 0) return;
+        if (pluginsToUpdate.length === 0) return upToDate();
 
         // Sort so that Plugins Manager (this plugin) updates LAST.
         // Updating self terminates the plugin context immediately.
@@ -4294,22 +4390,32 @@ class Plugin extends AppPlugin {
             return 0;
         });
 
-        if (!await this._showConfirmModal('Update all', `Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\nThis will overwrite any local code modifications for these plugins.`, { confirmText: 'Update all' })) {
-            return;
+        if (confirm && !await this._showConfirmModal('Update all', `Apply updates to ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}?\nThis will overwrite any local code modifications for these plugins.`, { confirmText: 'Update all' })) {
+            return { count: 0, failed: 0 };
         }
 
-        const originalText = btn.innerText;
-        btn.innerHTML = '';
-        btn.appendChild(this.ui.createIcon('loader'));
-        btn.disabled = true;
+        if (notify) {
+            this.ui.addToaster({
+                title: `Updating ${pluginsToUpdate.length} plugin${pluginsToUpdate.length === 1 ? '' : 's'}…`,
+                message: pluginsToUpdate.map(p => { try { return p.getExistingCodeAndConfig().json.name; } catch (e) { return null; } }).filter(Boolean).join(', '),
+                autoDestroyTime: 4000,
+                dismissible: true,
+            });
+        }
+
+        this._updatingAll = true;
+        // No-ops when control is null, so the headless path needs no special casing.
+        const busy = this._bulkBusyStart(control && control.el, control && control.isSwitch);
 
         let successCount = 0;
         let failedNames = [];
+        /** @type {string[]} "Name v1.2.2 → v1.2.3" — for the summary toast. */
+        const updated = [];
         const total = pluginsToUpdate.length;
 
         for (let i = 0; i < pluginsToUpdate.length; i++) {
             const p = pluginsToUpdate[i];
-            btn.textContent = `Updating… (${i + 1}/${total})`;
+            busy.progress(`Updating… (${i + 1}/${total})`);
             try {
                 const conf = p.getExistingCodeAndConfig().json;
                 const sourceRepo = conf.__source_repo;
@@ -4339,8 +4445,13 @@ class Plugin extends AppPlugin {
                     this._writeUpdateCache(availableUpdates);
                     this._updateStatusBarIcon();
                     localStorage.setItem('pm_self_update_pending', 'true');
-                    const panel = this.ui.getActivePanel();
-                    if (panel) this.ui.closePanel(panel);
+                    // Only close a panel when OUR panel is the one open. Run from the command
+                    // palette with the manager closed, getActivePanel() returns whatever the
+                    // user is actually looking at — closing that would shut their note.
+                    if (container) {
+                        const panel = this.ui.getActivePanel();
+                        if (panel) this.ui.closePanel(panel);
+                    }
                     await p.savePlugin(sanitizedConf, remoteJs);
                 } else {
                     await p.savePlugin(sanitizedConf, remoteJs);
@@ -4349,6 +4460,21 @@ class Plugin extends AppPlugin {
                     delete availableUpdates[p.getGuid()];
                     this._writeUpdateCache(availableUpdates);
                     this._updateStatusBarIcon();
+                    if (notify) {
+                        const fromV = conf.version || conf.ver || '?';
+                        const toV = remoteJson.version || remoteJson.ver || '?';
+                        const label = `${remoteJson.name || conf.name} v${fromV} → v${toV}`;
+                        updated.push(label);
+
+                        // Best-effort; omitted silently if GitHub won't tell us.
+                        const commit = await this._fetchLatestCommit(sourceRepo);
+                        this.ui.addToaster({
+                            title: `Updated ${remoteJson.name || conf.name} (${i + 1}/${total})`,
+                            message: `v${fromV} → v${toV}` + (commit ? `\n${commit.subject} (${commit.sha})` : ''),
+                            autoDestroyTime: 4000,
+                            dismissible: true,
+                        });
+                    }
                 }
             } catch (e) {
                 console.error(e);
@@ -4360,20 +4486,25 @@ class Plugin extends AppPlugin {
         }
 
         this._autoExport(); // fire-and-forget
-        this.loadPlugins(container);
+        busy.end();
+        this._updatingAll = false;
+        // Only re-render the list when the panel is actually open.
+        if (container) this.loadPlugins(container);
 
-        btn.innerText = originalText;
-        btn.disabled = false;
-
-        const parts = [`Successfully updated: ${successCount}`];
+        // Summarise exactly what changed, version-to-version, rather than just a count.
+        const parts = [];
+        if (updated.length > 0) parts.push(updated.join('\n'));
+        else parts.push(`Successfully updated: ${successCount}`);
         if (failedNames.length > 0) parts.push(`Failed: ${failedNames.join(', ')}`);
 
         this.ui.addToaster({
-            title: failedNames.length > 0 ? "Update All Completed with Errors" : "Update All Successful",
-            message: parts.join('. '),
+            title: failedNames.length > 0 ? "Update All Completed with Errors" : `Updated ${successCount} plugin${successCount === 1 ? '' : 's'}`,
+            message: parts.join('\n'),
             dismissible: true,
-            autoDestroyTime: failedNames.length > 0 ? 8000 : 5000
+            autoDestroyTime: failedNames.length > 0 ? 10000 : 8000
         });
+
+        return { count: successCount, failed: failedNames.length };
     }
 
     async showExportDialog(typeFilter) {
