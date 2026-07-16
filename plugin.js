@@ -1,5 +1,5 @@
 // Fallback only — the live value is read from the plugin's own config at load.
-const PM_VERSION = '1.22.0';
+const PM_VERSION = '1.22.1';
 
 // Curated per-card color palette (one representative Tailwind-500 per hue). Kept small
 // and inlined so this paste-only plugin stays self-contained (no shared-module import).
@@ -2234,6 +2234,7 @@ class Plugin extends AppPlugin {
                     if (conf.custom !== undefined) {
                         sanitizedConf.custom = this._cloneJsonValue(conf.custom);
                     }
+                    this._ensurePluginIdentity(sanitizedConf, conf);
 
                     const isSelfUpdate = p.getGuid() === this.getGuid();
 
@@ -3717,6 +3718,32 @@ class Plugin extends AppPlugin {
         // Thymer's own runtime will surface syntax errors when the plugin loads.
     }
 
+    /**
+     * Never save a plugin config without an identity. Thymer stamps a config
+     * saved without `name` as "New Global Plugin" (permanently renaming the
+     * plugin), and a save missing `__source_repo` silently drops the plugin off
+     * the update list. Falls back to the existing config's identity fields,
+     * and refuses the save outright if no name can be resolved.
+     */
+    _ensurePluginIdentity(conf, existingConf) {
+        if ((typeof conf.name !== 'string' || !conf.name.trim())
+            && existingConf && typeof existingConf.name === 'string' && existingConf.name.trim()) {
+            conf.name = existingConf.name;
+        }
+        if (typeof conf.name !== 'string' || !conf.name.trim()) {
+            throw new Error('Plugin config has no "name" — refusing to save a nameless config.');
+        }
+        if (existingConf) {
+            if (conf.__source_repo === undefined && existingConf.__source_repo !== undefined) {
+                conf.__source_repo = existingConf.__source_repo;
+            }
+            if (conf.__source_files === undefined && existingConf.__source_files !== undefined) {
+                conf.__source_files = this._cloneJsonValue(existingConf.__source_files);
+            }
+        }
+        return conf;
+    }
+
     /** Security: Whitelist allowed plugin.json config keys and enforce size limits */
     _sanitizePluginConfig(jsonConf, { allowCustom = false, preserveUnknownKeys = false } = {}) {
         if (preserveUnknownKeys) {
@@ -4207,15 +4234,10 @@ class Plugin extends AppPlugin {
             } catch (e) { }
         }
 
-        if (!targetPlugin) {
-            if (pType === 'app' || pType === 'global') {
-                targetPlugin = await this.data.createGlobalPlugin();
-            } else if (pType === 'collection') {
-                targetPlugin = await this.data.createCollection();
-            }
-
-            if (!targetPlugin) throw new Error("Failed to create plugin container in workspace.");
-        }
+        // Validate EVERYTHING before creating anything in the workspace, so a
+        // failed install can never strand an empty container — it lingers as a
+        // name-less "New Global Plugin" and looks like a broken install of
+        // whatever the user grabbed.
 
         // Validate JS before saving — catch issues that would crash Thymer's runtime
         this._validatePluginJS(jsonConf.name, jsCode);
@@ -4225,6 +4247,7 @@ class Plugin extends AppPlugin {
         if (existingConf && existingConf.custom !== undefined && (!trustedConfig || jsonConf.custom === undefined)) {
             sanitizedConf.custom = this._cloneJsonValue(existingConf.custom);
         }
+        this._ensurePluginIdentity(sanitizedConf, existingConf);
 
         // Security: enforce code size limit (500KB)
         if (jsCode && jsCode.length > 500 * 1024) {
@@ -4256,7 +4279,28 @@ class Plugin extends AppPlugin {
             }
         }
 
-        await targetPlugin.savePlugin(sanitizedConf, jsCode);
+        let createdFresh = false;
+        if (!targetPlugin) {
+            if (pType === 'app' || pType === 'global') {
+                targetPlugin = await this.data.createGlobalPlugin();
+            } else if (pType === 'collection') {
+                targetPlugin = await this.data.createCollection();
+            }
+
+            if (!targetPlugin) throw new Error("Failed to create plugin container in workspace.");
+            createdFresh = true;
+        }
+
+        try {
+            await targetPlugin.savePlugin(sanitizedConf, jsCode);
+        } catch (e) {
+            // Never strand a just-created container (see above) — trash it and
+            // surface the original error.
+            if (createdFresh) {
+                try { await targetPlugin.trashPlugin(); } catch (cleanupErr) { /* best effort */ }
+            }
+            throw e;
+        }
 
         // Security: sanitize and save CSS if provided
         if (cssCode) {
@@ -4617,6 +4661,7 @@ class Plugin extends AppPlugin {
                 if (conf.custom !== undefined) {
                     sanitizedConf.custom = this._cloneJsonValue(conf.custom);
                 }
+                this._ensurePluginIdentity(sanitizedConf, conf);
 
                 const isSelfUpdate = p.getGuid() === this.getGuid();
 
@@ -5093,6 +5138,7 @@ class Plugin extends AppPlugin {
                     if (currentConf.custom !== undefined) {
                         sanitizedConf.custom = this._cloneJsonValue(currentConf.custom);
                     }
+                    this._ensurePluginIdentity(sanitizedConf, currentConf);
 
                     const isSelfUpdate = pluginObj.getGuid() === this.getGuid();
 
